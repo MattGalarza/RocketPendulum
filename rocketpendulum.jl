@@ -483,7 +483,7 @@ println("Setting up animation...")
 figs = animate_pendulum2(sol, params)
 
 # pick the figure you animated:
-fig = fig1  
+fig = fig  
 
 # define the times you want to capture (0…t_end in N frames)
 t_end = sol.t[end]
@@ -499,7 +499,6 @@ end
 
 # or record to MP4 (requires ffmpeg on your PATH):
 record(fig, "pendulum.mp4", times; framerate=60)
-
 
 
 
