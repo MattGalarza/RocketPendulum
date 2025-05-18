@@ -1,5 +1,5 @@
 using Plots, Measures, LinearAlgebra, LaTeXStrings
-gr() # Use GR backend for 3D plotting
+gr()
 
 # --------------------------- Spherical Formulation ---------------------------
 # Set up the 3D plot with a zoomed-in view
