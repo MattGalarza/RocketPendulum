@@ -110,7 +110,6 @@ function calculate_forces!(nn::SpringMassNN)
             # Coupling forces - to next layer
             if l < nn.layers
                 for j in 1:nn.neurons[l+1]
-                    # Note: Fixed indexing here - weights between layer l and l+1 are stored in nn.w[l]
                     forces[l][i] -= nn.w[l][j, i] * (nn.x[l][i] - nn.x[l+1][j])
                 end
             end
@@ -219,19 +218,54 @@ end
 Update spring constants based on energy gradients.
 """
 function learn_step!(nn::SpringMassNN, learning_rate::Float64)
-    # Update coupling spring constants
+    # Update coupling spring constants with stronger learning and nonlinearity
     for l in 2:nn.layers
         for i in 1:nn.neurons[l]
             for j in 1:nn.neurons[l-1]
-                # Gradient of energy w.r.t. spring constant
-                delta_w = learning_rate * (nn.x[l][i] - nn.x[l-1][j])^2 / 2
+                # Calculate the squared difference - the energy gradient term
+                sqDiff = (nn.x[l][i] - nn.x[l-1][j])^2
                 
-                # Update spring constant
-                nn.w[l-1][i, j] -= delta_w
+                # Nonlinear learning with a threshold
+                if sqDiff > 0.1  # Only make significant changes when difference is meaningful
+                    # Strong adjustment for larger differences
+                    delta_w = learning_rate * sqDiff 
+                    
+                    # Apply larger updates when positions are very different
+                    nn.w[l-1][i, j] -= delta_w
+                else
+                    # Small adjustment for similar positions
+                    nn.w[l-1][i, j] -= learning_rate * sqDiff * 0.1
+                end
                 
-                # Ensure spring constants don't go negative
+                # Ensure spring constants stay in a reasonable range
                 if nn.w[l-1][i, j] < 0.01
                     nn.w[l-1][i, j] = 0.01
+                elseif nn.w[l-1][i, j] > 2.0
+                    nn.w[l-1][i, j] = 2.0
+                end
+            end
+        end
+    end
+    
+    # Additionally, modify sink constants to help with learning
+    for l in 2:nn.layers
+        for i in 1:nn.neurons[l]
+            # Adjust sink constants based on position
+            target = 0.0
+            if l == nn.layers  # For output layer, we have specific targets
+                # Leave nn.K[l][i] as is - it's set during set_target!
+            else  # For hidden layers, encourage activity
+                if abs(nn.x[l][i]) < 0.3  # If activity is low
+                    nn.K[l][i] *= 0.95  # Reduce sink constant to allow more movement
+                else
+                    nn.K[l][i] *= 1.01  # Slightly increase sink for stability
+                end
+                
+                # Keep sink constants in reasonable range
+                if nn.K[l][i] < 0.05
+                    nn.K[l][i] = 0.05
+                elseif nn.K[l][i] > 1.0
+                    nn.K[l][i] = 1.0
                 end
             end
         end
@@ -372,8 +406,8 @@ end
 
 # Example: XOR problem solution
 function run_xor_example()
-    # Create network with 5 hidden units
-    nn = SpringMassNN(3, [2, 5, 1])
+    # Create network with 8 hidden units for better representation
+    nn = SpringMassNN(3, [2, 8, 1])
     
     # XOR training data
     inputs = [[0.0, 0.0], [0.0, 1.0], [1.0, 0.0], [1.0, 1.0]]
@@ -381,7 +415,7 @@ function run_xor_example()
     
     # Train the network
     error_history, energy_history = train!(nn, inputs, targets, 
-                                          epochs=200, steps=100, dt=0.01, learning_rate=0.03)
+                                          epochs=300, steps=100, dt=0.01, learning_rate=0.1)
     
     # Test the network
     test_network(nn, inputs, targets)
