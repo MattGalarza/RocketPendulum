@@ -46,6 +46,7 @@ mutable struct SpringMassNeuralNetwork
                                     weight_range::Tuple{Float64,Float64}=(-0.5, 0.5),
                                     normalize::Bool=false,
                                     seed::Union{Int,Nothing}=nothing)
+                                    
         # Set random seed if provided
         if seed !== nothing
             Random.seed!(seed)
@@ -339,13 +340,18 @@ if abspath(PROGRAM_FILE) == @__FILE__
     demo_network_creation()
 end
 
-# Create a network with 2 inputs, 4 neurons in first hidden layer, 
-# 3 neurons in second hidden layer, and 1 output
+# Create a network with 2 inputs, 4 and 3 hidden neurons, and 1 output
 network = SpringMassNeuralNetwork([2, 4, 3, 1], 
-                                 damping=0.1, 
-                                 dt=0.01, 
-                                 learning_rate=0.05, normalize=true)
+                                normalize=true,  # Enable normalization
+                                # Additional optional parameters:
+                                damping=0.1,
+                                dt=0.01,
+                                learning_rate=0.05,
+                                mass_range=(0.5, 1.5),
+                                spring_constant_range=(0.7, 1.3),
+                                sink_spring_range=(0.3, 0.9),
+                                weight_range=(-1.0, 1.0),
+                                seed=42)
 
-# Print details and visualize
-print_network_info(network)
+# Visualize the network
 visualize_network(network)
