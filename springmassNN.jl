@@ -74,7 +74,7 @@ function network_energy(nn::SpringMassNN)
         end
     end
     
-    # Coupling energy
+    # Coupling energy - consistent with how forces are calculated
     for l in 2:nn.layers
         for i in 1:nn.neurons[l]
             for j in 1:nn.neurons[l-1]
@@ -110,7 +110,8 @@ function calculate_forces!(nn::SpringMassNN)
             # Coupling forces - to next layer
             if l < nn.layers
                 for j in 1:nn.neurons[l+1]
-                    forces[l][i] -= nn.w[l][i, j] * (nn.x[l+1][j] - nn.x[l][i])
+                    # Note: Fixed indexing here - weights between layer l and l+1 are stored in nn.w[l]
+                    forces[l][i] -= nn.w[l][j, i] * (nn.x[l][i] - nn.x[l+1][j])
                 end
             end
             
