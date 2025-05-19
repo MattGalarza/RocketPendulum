@@ -268,8 +268,13 @@ function update_spring_constants!(nn::SpringMassNN, learning_rate::Float64)
     # Update sink spring constants
     for l in 1:nn.layers
         for i in 1:nn.neurons[l]
+            # Skip input and output layers for sink constants
+            if l == 1 || l == nn.layers
+                continue
+            end
+            
             # Gradient of energy with respect to sink spring constant
-            delta_K = -learning_rate * 0.5 * nn.x[l][i]^2
+            delta_K = learning_rate * 0.5 * nn.x[l][i]^2
             nn.K[l][i] -= delta_K
             
             # Ensure spring constants remain positive for stability
@@ -284,7 +289,7 @@ function update_spring_constants!(nn::SpringMassNN, learning_rate::Float64)
         for i in 1:nn.neurons[l]
             for n in 1:nn.neurons[l-1]
                 # Gradient of energy with respect to previous layer coupling
-                delta_prev = -learning_rate * 0.5 * (nn.x[l][i] - nn.x[l-1][n])^2
+                delta_prev = learning_rate * 0.5 * (nn.x[l][i] - nn.x[l-1][n])^2
                 nn.kPrev[l-1][i, n] -= delta_prev
             end
         end
@@ -294,8 +299,13 @@ function update_spring_constants!(nn::SpringMassNN, learning_rate::Float64)
     for l in 1:nn.layers-1
         for i in 1:nn.neurons[l]
             for m in 1:nn.neurons[l+1]
+                # Skip input layer connections to hidden during training
+                if l == 1
+                    continue
+                end
+                
                 # Gradient of energy with respect to next layer coupling
-                delta_next = -learning_rate * 0.5 * (nn.x[l+1][m] - nn.x[l][i])^2
+                delta_next = learning_rate * 0.5 * (nn.x[l+1][m] - nn.x[l][i])^2
                 nn.kNext[l][i, m] -= delta_next
             end
         end
@@ -364,14 +374,14 @@ end
 
 """
     train!(nn::SpringMassNN, inputs::Vector{Vector{Float64}}, 
-           targets::Vector{Vector{Float64}}, epochs::Int=100,
-           relaxation_steps::Int=200, dt::Float64=0.01, learning_rate::Float64=0.005)
+           targets::Vector{Vector{Float64}}, epochs::Int=200,
+           relaxation_steps::Int=150, dt::Float64=0.01, learning_rate::Float64=0.01)
 
 Train the spring-mass neural network on the given dataset.
 """
 function train!(nn::SpringMassNN, inputs::Vector{Vector{Float64}}, 
-                targets::Vector{Vector{Float64}}, epochs::Int=100,
-                relaxation_steps::Int=200, dt::Float64=0.01, learning_rate::Float64=0.005)
+                targets::Vector{Vector{Float64}}, epochs::Int=200,
+                relaxation_steps::Int=150, dt::Float64=0.01, learning_rate::Float64=0.01)
     
     energy_history = Float64[]
     errors_history = Float64[]
@@ -488,15 +498,15 @@ end
 
 # Example usage for XOR problem
 function run_xor_example()
-    # Create network
-    nn = SpringMassNN(3, [2, 3, 1])
+    # Create network with larger hidden layer for better XOR learning
+    nn = SpringMassNN(3, [2, 5, 1])  # Increased from 3 to 5 hidden neurons
     
     # Define XOR training data
     inputs = [[0.0, 0.0], [0.0, 1.0], [1.0, 0.0], [1.0, 1.0]]
     targets = [[0.0], [1.0], [1.0], [0.0]]
     
-    # Train network
-    errors, energies = train!(nn, inputs, targets, 100, 200, 0.01, 0.005)
+    # Train network with improved parameters
+    errors, energies = train!(nn, inputs, targets, 200, 150, 0.01, 0.01)
     
     # Test network
     test_network(nn, inputs, targets)
