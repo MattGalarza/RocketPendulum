@@ -1,4 +1,3 @@
-
 using Plots
 using Random
 
@@ -150,7 +149,12 @@ function update_weights!(network, activities, errors)
         
         # Weight change proportional to error and activation
         delta_w = network.learning_rate * errors[l+1] * transpose(prev_activations)
-        network.weights[l] += delta_w
+        
+        # Add a small oscillatory component to help escape local minima
+        # This is like giving the springs a small "shake" to find better configurations
+        oscillation = 0.05 * network.learning_rate * (rand(size(delta_w)...) .- 0.5)
+        
+        network.weights[l] += delta_w .+ oscillation
     end
 end
 
@@ -168,6 +172,7 @@ function train!(network, inputs, targets;
     
     for epoch in 1:num_epochs
         total_error = 0.0
+        last_energy = 0.0  # Track the last energy value
         
         # Process each training example
         for i in 1:size(inputs, 1)
@@ -193,10 +198,11 @@ function train!(network, inputs, targets;
                 update_weights!(network, activities, errors)
                 
                 # Calculate energy
-                energy = calculate_energy(network, activities, predictions, velocities)
+                current_energy = calculate_energy(network, activities, predictions, velocities)
+                last_energy = current_energy  # Store for later use
                 
                 # Stop if energy is low enough
-                if energy < convergence_threshold
+                if current_energy < convergence_threshold
                     break
                 end
             end
@@ -208,7 +214,7 @@ function train!(network, inputs, targets;
         end
         
         # Record history
-        push!(energy_history, energy)
+        push!(energy_history, last_energy)  # Use the stored energy value
         push!(error_history, total_error)
         
         # Print progress
@@ -226,7 +232,7 @@ end
 
 Make a prediction for a given input.
 """
-function predict(network, input_data; max_time=5.0, convergence_threshold=0.001)
+function predict(network, input_data; max_time=10.0, convergence_threshold=0.0005)
     # Initialize activities and velocities
     activities = [zeros(Float64, size) for size in network.layer_sizes]
     velocities = [zeros(Float64, size) for size in network.layer_sizes]
@@ -259,7 +265,12 @@ function predict(network, input_data; max_time=5.0, convergence_threshold=0.001)
         end
     end
     
-    return activities[end]
+    # Apply a sigmoid-like scaling to the output for better 0/1 separation
+    # This helps transform the small output values to more clearly separated results
+    outputs = activities[end]
+    scaled_outputs = 1.0 ./ (1.0 .+ exp.(-10.0 * outputs))
+    
+    return scaled_outputs
 end
 
 """
@@ -275,11 +286,23 @@ function test_xor()
     # Reshape targets to be a column vector for each example
     targets = reshape(targets, (4, 1))
     
-    # Create network with 2 inputs, 3 hidden neurons, 1 output
-    network = SpringMassNeuralNetwork([2, 3, 1])
+    # Create network with 2 inputs, 4 hidden neurons, 1 output
+    # Use physics parameters specifically tuned for XOR
+    network = SpringMassNeuralNetwork([2, 4, 1], 
+                                     damping=0.1,  # Lower damping allows more oscillation
+                                     dt=0.02,      # Larger time step for faster dynamics
+                                     learning_rate=0.2) # Higher learning rate for stronger "springs"
     
-    # Train the network
-    energy_history, error_history = train!(network, inputs, targets, num_epochs=100)
+    # Initialize weights with slightly larger values
+    for l in 1:length(network.weights)
+        network.weights[l] = 2.0 * (rand(Float64, size(network.weights[l])...) .- 0.5)
+    end
+    
+    # Train the network with more time per example to allow settling
+    energy_history, error_history = train!(network, inputs, targets, 
+                                          num_epochs=100, 
+                                          max_time=10.0, 
+                                          convergence_threshold=0.0005)
     
     # Plot training progress
     p = plot(error_history, 
