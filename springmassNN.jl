@@ -1,5 +1,304 @@
+
 using Plots
 using Random
+
+"""
+    SpringMassNeuralNetwork
+
+A Neural Network based on spring-mass physical system dynamics.
+"""
+mutable struct SpringMassNeuralNetwork
+    layer_sizes::Vector{Int}
+    num_layers::Int
+    weights::Vector{Matrix{Float64}}
+    masses::Vector{Vector{Float64}}
+    spring_constants::Vector{Matrix{Float64}}
+    damping::Float64
+    dt::Float64
+    learning_rate::Float64
+    
+    function SpringMassNeuralNetwork(layer_sizes::Vector{Int}; 
+                                    damping::Float64=0.2, 
+                                    dt::Float64=0.01, 
+                                    learning_rate::Float64=0.05)
+        num_layers = length(layer_sizes)
+        
+        # Initialize weights randomly
+        weights = Vector{Matrix{Float64}}(undef, num_layers-1)
+        for i in 1:(num_layers-1)
+            weights[i] = rand(Float64, layer_sizes[i+1], layer_sizes[i]) .- 0.5
+        end
+        
+        # Initialize physical parameters
+        # For simplicity, all masses are set to 1
+        masses = [ones(Float64, size) for size in layer_sizes]
+        
+        # Spring constants could be adjusted, but set to 1 for now
+        spring_constants = Vector{Matrix{Float64}}(undef, num_layers-1)
+        for i in 1:(num_layers-1)
+            spring_constants[i] = ones(Float64, layer_sizes[i+1], layer_sizes[i])
+        end
+        
+        new(layer_sizes, num_layers, weights, masses, spring_constants, damping, dt, learning_rate)
+    end
+end
+
+"""
+    activation(x)
+
+Activation function (tanh).
+"""
+function activation(x)
+    return tanh.(x)
+end
+
+"""
+    activation_derivative(x)
+
+Derivative of the activation function.
+"""
+function activation_derivative(x)
+    return 1.0 .- tanh.(x).^2
+end
+
+"""
+    forward_pass(network, activities)
+
+Calculate predictions and errors for all layers.
+"""
+function forward_pass(network, activities)
+    predictions = [zeros(Float64, size(a)) for a in activities]
+    errors = [zeros(Float64, size(a)) for a in activities]
+    
+    # Calculate predictions for each layer
+    for l in 2:network.num_layers
+        # Apply activation to previous layer activities
+        prev_activations = activation(activities[l-1])
+        
+        # Compute weighted sum
+        predictions[l] = network.weights[l-1] * prev_activations
+        
+        # Calculate error
+        errors[l] = activities[l] - predictions[l]
+    end
+    
+    return predictions, errors
+end
+
+"""
+    calculate_energy(network, activities, predictions, velocities)
+
+Calculate the system's total energy.
+"""
+function calculate_energy(network, activities, predictions, velocities)
+    energy = 0.0
+    
+    # Kinetic energy
+    for l in 1:network.num_layers
+        energy += 0.5 * sum(network.masses[l] .* velocities[l].^2)
+    end
+    
+    # Potential energy from prediction errors
+    for l in 2:network.num_layers
+        energy += 0.5 * sum((activities[l] - predictions[l]).^2)
+    end
+    
+    return energy
+end
+
+"""
+    update_state!(activities, velocities, network, predictions, errors)
+
+Update neuron activities and velocities based on physics.
+"""
+function update_state!(activities, velocities, network, predictions, errors)
+    # Update hidden layers (not input or output during training)
+    for l in 2:(network.num_layers-1)
+        # Calculate forces on neurons
+        force = -errors[l]  # Error correction force
+        
+        # Force from next layer errors
+        if l < network.num_layers
+            prev_activations = activation(activities[l])
+            next_layer_influence = transpose(network.weights[l]) * errors[l+1]
+            force += next_layer_influence
+        end
+        
+        # Add damping force
+        force -= network.damping * velocities[l]
+        
+        # Apply F = ma to get acceleration (assuming mass = 1)
+        acceleration = force ./ network.masses[l]
+        
+        # Update velocity
+        velocities[l] += acceleration * network.dt
+        
+        # Update position/activity
+        activities[l] += velocities[l] * network.dt
+    end
+end
+
+"""
+    update_weights!(network, activities, errors)
+
+Update weights based on errors and activations.
+"""
+function update_weights!(network, activities, errors)
+    for l in 1:(network.num_layers-1)
+        # Hebbian-like learning rule
+        prev_activations = activation(activities[l])
+        
+        # Weight change proportional to error and activation
+        delta_w = network.learning_rate * errors[l+1] * transpose(prev_activations)
+        network.weights[l] += delta_w
+    end
+end
+
+"""
+    train!(network, inputs, targets; num_epochs=50, max_time=5.0, convergence_threshold=0.001)
+
+Train the network.
+"""
+function train!(network, inputs, targets; 
+                num_epochs=50, max_time=5.0, convergence_threshold=0.001)
+    energy_history = Float64[]
+    error_history = Float64[]
+    
+    println("Training the Spring-Mass Neural Network...")
+    
+    for epoch in 1:num_epochs
+        total_error = 0.0
+        
+        # Process each training example
+        for i in 1:size(inputs, 1)
+            # Initialize activities and velocities
+            activities = [zeros(Float64, size) for size in network.layer_sizes]
+            velocities = [zeros(Float64, size) for size in network.layer_sizes]
+            
+            # Set input
+            activities[1] = inputs[i, :]
+            
+            # Set target output
+            activities[end] = targets[i, :]
+            
+            # Let the system settle
+            for t in 0:network.dt:max_time
+                # Forward pass
+                predictions, errors = forward_pass(network, activities)
+                
+                # Update states
+                update_state!(activities, velocities, network, predictions, errors)
+                
+                # Update weights
+                update_weights!(network, activities, errors)
+                
+                # Calculate energy
+                energy = calculate_energy(network, activities, predictions, velocities)
+                
+                # Stop if energy is low enough
+                if energy < convergence_threshold
+                    break
+                end
+            end
+            
+            # Calculate error for this example
+            predictions, errors = forward_pass(network, activities)
+            example_error = sum(errors[end].^2)
+            total_error += example_error
+        end
+        
+        # Record history
+        push!(energy_history, energy)
+        push!(error_history, total_error)
+        
+        # Print progress
+        if epoch % 10 == 0
+            println("Epoch $epoch: Error = $total_error")
+        end
+    end
+    
+    println("Training complete!")
+    return energy_history, error_history
+end
+
+"""
+    predict(network, input_data; max_time=5.0, convergence_threshold=0.001)
+
+Make a prediction for a given input.
+"""
+function predict(network, input_data; max_time=5.0, convergence_threshold=0.001)
+    # Initialize activities and velocities
+    activities = [zeros(Float64, size) for size in network.layer_sizes]
+    velocities = [zeros(Float64, size) for size in network.layer_sizes]
+    
+    # Set input
+    activities[1] = input_data
+    
+    # Let the system settle to find the output
+    for t in 0:network.dt:max_time
+        # Forward pass
+        predictions, errors = forward_pass(network, activities)
+        
+        # Calculate forces and update all layers except input
+        for l in 2:network.num_layers
+            # Calculate force
+            force = -errors[l]
+            
+            # Add damping
+            force -= network.damping * velocities[l]
+            
+            # Update velocity and position
+            velocities[l] += force * network.dt
+            activities[l] += velocities[l] * network.dt
+        end
+        
+        # Check convergence
+        energy = sum(sum(errors[l].^2) for l in 2:network.num_layers)
+        if energy < convergence_threshold
+            break
+        end
+    end
+    
+    return activities[end]
+end
+
+"""
+    test_xor()
+
+Test the Spring-Mass Neural Network on the XOR problem.
+"""
+function test_xor()
+    # XOR problem data
+    inputs = [0.0 0.0; 0.0 1.0; 1.0 0.0; 1.0 1.0]
+    targets = [0.0; 1.0; 1.0; 0.0]
+    
+    # Reshape targets to be a column vector for each example
+    targets = reshape(targets, (4, 1))
+    
+    # Create network with 2 inputs, 3 hidden neurons, 1 output
+    network = SpringMassNeuralNetwork([2, 3, 1])
+    
+    # Train the network
+    energy_history, error_history = train!(network, inputs, targets, num_epochs=100)
+    
+    # Plot training progress
+    p = plot(error_history, 
+            title="Training Error Over Time for XOR", 
+            xlabel="Epoch", 
+            ylabel="Error", 
+            grid=true, 
+            linewidth=2,
+            legend=false)
+    display(p)
+    
+    # Test the network
+    println("\nTesting Spring-Mass Neural Network on XOR:")
+    println("--------------------------------")
+    for i in 1:size(inputs, 1)
+        prediction = predict(network, inputs[i, :])
+        println("Input: $(inputs[i, :]) → Output: $(round(prediction[1], digits=4)) (Expected: $(targets[i, 1]))")
+    end
+end
 
 """
     generate_sparse_sinusoidal_dataset(num_samples, input_dim, num_components)
@@ -182,15 +481,14 @@ function test_spring_mass_nn_on_sinusoidal_data()
     return network, p_results
 end
 
+# Main function to run all tests
 function main()
-    # Run the sinusoidal signal mapping test
+    println("=== Testing Spring-Mass Neural Network on XOR Problem ===")
+    test_xor()
+    
+    println("\n\n=== Testing Spring-Mass Neural Network on Sinusoidal Mapping ===")
     test_spring_mass_nn_on_sinusoidal_data()
 end
 
-# Run the main function if this is the main script
-if abspath(PROGRAM_FILE) == @__FILE__
-    main()
-end
-network = SpringMassNeuralNetwork([2, 3, 1])
-energy_history, error_history = train!(network, inputs, targets)
-output = predict(network, input_data)
+# Run the main function
+main()
