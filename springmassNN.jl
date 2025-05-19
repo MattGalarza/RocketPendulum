@@ -184,42 +184,64 @@ function print_network_info(network::SpringMassNeuralNetwork)
 end
 
 """
-    visualize_network(network)
+    visualize_network(network; angle=15)
 
 Create a visualization of the network architecture and connection weights,
-including 3D representation of sink springs.
+including 3D representation of sink springs. The network can be rotated by
+specifying an angle in degrees.
+
+Parameters:
+- network: SpringMassNeuralNetwork instance
+- angle: Rotation angle in degrees for 3D-like perspective
 """
-function visualize_network(network::SpringMassNeuralNetwork)
+function visualize_network(network::SpringMassNeuralNetwork; angle=15)
     # Calculate node positions for visualization
     max_layer_size = maximum(network.layer_sizes)
     node_positions = Dict()
     
-    # Calculate x and y coordinates for each node
+    # Set up perspective scaling factor
+    perspective_scale = 0.6  # Controls the amount of "depth" perspective
+    angle_rad = angle * π / 180  # Convert angle to radians
+    
+    # Create a larger plot area for the rotated view
+    horizontal_padding = 1.0
+    vertical_padding = 1.5
+    plot_width = network.num_layers + 2*horizontal_padding
+    plot_height = max_layer_size + 2*vertical_padding
+    
+    # Calculate x and y coordinates for each node with perspective rotation
     for l in 1:network.num_layers
         layer_size = network.layer_sizes[l]
         for i in 1:layer_size
-            # Horizontal position (by layer)
-            x = l
-            # Vertical position (centered in layer)
-            y = (max_layer_size - layer_size) / 2 + i
+            # Base positions (centered in layer)
+            base_x = l
+            base_y = (max_layer_size - layer_size) / 2 + i
+            
+            # Apply perspective rotation
+            # Move nodes to the right as they go higher for perspective effect
+            x = base_x + (base_y - (max_layer_size/2)) * sin(angle_rad) * perspective_scale
+            y = base_y
+            
             node_positions[(l, i)] = (x, y)
         end
     end
     
     # Create plot with 3D-like floor
-    p = plot(size=(800, 600), 
-             xlim=(0.5, network.num_layers + 0.5), 
-             ylim=(0, max_layer_size + 1.5),
+    p = plot(size=(900, 700), 
+             xlim=(0.5 - horizontal_padding, network.num_layers + 0.5 + horizontal_padding), 
+             ylim=(0, plot_height),
              legend=false, 
              grid=false, 
              ticks=false, 
              framestyle=:none,
              title="Spring-Mass Neural Network Architecture")
     
-    # Draw floor (for sink springs visualization)
+    # Draw floor (for sink springs visualization) - with perspective
     floor_y = 0.5
-    plot!(p, [0.5, network.num_layers + 0.5], [floor_y, floor_y], 
-          color=:gray, linewidth=2, alpha=0.5)
+    floor_x_start = 0.5 - horizontal_padding * sin(angle_rad)
+    floor_x_end = network.num_layers + 0.5 + horizontal_padding * sin(angle_rad)
+    plot!(p, [floor_x_start, floor_x_end], [floor_y, floor_y], 
+          color=:gray, linewidth=2, alpha=0.7)
     
     # Draw sink springs (connections to floor)
     for l in 1:network.num_layers
@@ -231,16 +253,20 @@ function visualize_network(network::SpringMassNeuralNetwork)
             # Line thickness proportional to spring constant
             line_width = 1 + 2 * spring_constant
             
-            # Draw sink spring as dashed line to floor
-            plot!(p, [pos[1], pos[1]], [pos[2], floor_y], 
+            # Draw sink spring as dashed line to floor with slight angle
+            # for 3D perspective
+            floor_x = pos[1] - 0.1 * sin(angle_rad)  # Slight offset for 3D feel
+            
+            # Purple dashed line for sink spring
+            plot!(p, [pos[1], floor_x], [pos[2], floor_y], 
                   linestyle=:dash, 
                   color=:purple, 
                   linewidth=line_width, 
-                  alpha=0.4)
+                  alpha=0.5)
         end
     end
     
-    # Draw connections (edges) between layers
+    # Draw connections (edges) between layers - draw back to front for proper overlap
     for l in 1:(network.num_layers-1)
         for i in 1:network.layer_sizes[l]
             for j in 1:network.layer_sizes[l+1]
@@ -250,18 +276,35 @@ function visualize_network(network::SpringMassNeuralNetwork)
                 # Calculate color and width based on weight
                 weight = network.weights[l][j, i]
                 line_color = weight > 0 ? :blue : :red
-                line_width = 1 + 3 * abs(weight) / max(0.1, maximum(abs.(network.weights[l])))
                 
-                # Draw line
-                plot!(p, [src[1], dst[1]], [src[2], dst[2]], 
+                # Make line width proportional to weight magnitude 
+                # but ensure it's visible
+                line_width = 1 + 4 * abs(weight)
+                
+                # For perspective effect, make connections at the top slightly more transparent
+                alpha_val = 0.7 - 0.2 * ((src[2] + dst[2]) / (2 * max_layer_size))
+                
+                # Draw line with subtle 3D curve effect
+                # Calculate control point for Bezier curve to add subtle 3D effect
+                ctrl_x = (src[1] + dst[1]) / 2 + 0.1 * sin(angle_rad)
+                ctrl_y = (src[2] + dst[2]) / 2
+                
+                # Create points for the curve
+                curve_points = 20
+                t_values = range(0, 1, length=curve_points)
+                curve_x = [(1-t)^2 * src[1] + 2*(1-t)*t * ctrl_x + t^2 * dst[1] for t in t_values]
+                curve_y = [(1-t)^2 * src[2] + 2*(1-t)*t * ctrl_y + t^2 * dst[2] for t in t_values]
+                
+                # Draw the connection as a subtle curve
+                plot!(p, curve_x, curve_y, 
                      linewidth=line_width, 
                      color=line_color, 
-                     alpha=0.6)
+                     alpha=alpha_val)
             end
         end
     end
     
-    # Draw nodes
+    # Draw nodes (from back to front for proper overlap)
     for l in 1:network.num_layers
         # Determine node color based on layer type
         if l == 1
@@ -278,19 +321,29 @@ function visualize_network(network::SpringMassNeuralNetwork)
             
             # Node size based on mass - larger mass = larger node
             mass = network.masses[l][i]
-            node_size = 5 + 5 * (mass - minimum(network.masses[l])) / 
-                        max(0.1, maximum(network.masses[l]) - minimum(network.masses[l]))
+            node_size = 7 + 6 * mass  # Enhanced size for better visibility
             
-            # Draw node
+            # Draw node with 3D effect (shadow and highlight)
+            # Shadow first (slight offset)
+            scatter!(p, [pos[1]+0.02], [pos[2]-0.02], 
+                   markersize=node_size, 
+                   color=:black,
+                   markerstrokewidth=0,
+                   alpha=0.3)
+                   
+            # Main node
             scatter!(p, [pos[1]], [pos[2]], 
                    markersize=node_size, 
                    color=node_color,
                    markerstrokewidth=1,
                    markerstrokecolor=:black)
+            
+            # Add node labels (optional)
+            # annotate!(p, pos[1], pos[2], text("$l,$i", 6, :white))
         end
     end
     
-    # Add layer labels
+    # Add layer labels with perspective adjustment
     for l in 1:network.num_layers
         if l == 1
             label = "Input"
@@ -300,7 +353,9 @@ function visualize_network(network::SpringMassNeuralNetwork)
             label = "Hidden $l"
         end
         
-        annotate!(p, l, max_layer_size + 1, text(label, 10, :black))
+        # Adjust label position based on perspective
+        label_x = l + max_layer_size * 0.05 * sin(angle_rad)
+        annotate!(p, label_x, max_layer_size + vertical_padding/2, text(label, 10, :black))
     end
     
     # Add sink springs explanation
@@ -328,9 +383,23 @@ function demo_network_creation()
     # Print network information
     print_network_info(network)
     
-    # Visualize the network
-    p = visualize_network(network)
-    display(p)
+    # Visualize the network with different rotation angles
+    angles = [0, 15, 30]
+    plots = []
+    
+    for angle in angles
+        p = visualize_network(network, angle=angle)
+        push!(plots, p)
+    end
+    
+    # Display all views side by side
+    combined_plot = plot(plots..., layout=(1, length(angles)), size=(1200, 500))
+    title!(combined_plot, "Spring-Mass Neural Network - Different Perspective Views")
+    display(combined_plot)
+    
+    # Also display the best individual view (30 degrees)
+    best_view = visualize_network(network, angle=30)
+    display(best_view)
     
     return network
 end
@@ -340,18 +409,5 @@ if abspath(PROGRAM_FILE) == @__FILE__
     demo_network_creation()
 end
 
-# Create a network with 2 inputs, 4 and 3 hidden neurons, and 1 output
-network = SpringMassNeuralNetwork([2, 4, 3, 1], 
-                                normalize=true,  # Enable normalization
-                                # Additional optional parameters:
-                                damping=0.1,
-                                dt=0.01,
-                                learning_rate=0.05,
-                                mass_range=(0.5, 1.5),
-                                spring_constant_range=(0.7, 1.3),
-                                sink_spring_range=(0.3, 0.9),
-                                weight_range=(-1.0, 1.0),
-                                seed=42)
 
-# Visualize the network
-visualize_network(network)
+visualize_network(network, angle=15)  # 30-degree rotation for best view
