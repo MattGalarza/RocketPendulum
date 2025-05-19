@@ -12,6 +12,7 @@ mutable struct SpringMassNeuralNetwork
     weights::Vector{Matrix{Float64}}     # Connection weights between layers
     masses::Vector{Vector{Float64}}      # Masses of each neuron
     spring_constants::Vector{Matrix{Float64}} # Spring constants for connections
+    sink_springs::Vector{Vector{Float64}}    # Sink spring constants (to ground)
     damping::Float64                     # Damping coefficient
     dt::Float64                          # Time step for simulation
     learning_rate::Float64               # Learning rate for weight updates
@@ -26,6 +27,7 @@ mutable struct SpringMassNeuralNetwork
     - `damping`: Damping coefficient for the spring-mass system
     - `dt`: Time step for numerical integration
     - `learning_rate`: Learning rate for weight updates
+    - `normalize`: Whether to normalize all parameters to [0,1] range
     
     Example:
     ```julia
@@ -40,7 +42,9 @@ mutable struct SpringMassNeuralNetwork
                                     learning_rate::Float64=0.05,
                                     mass_range::Tuple{Float64,Float64}=(0.8, 1.2),
                                     spring_constant_range::Tuple{Float64,Float64}=(0.8, 1.2),
+                                    sink_spring_range::Tuple{Float64,Float64}=(0.5, 1.0),
                                     weight_range::Tuple{Float64,Float64}=(-0.5, 0.5),
+                                    normalize::Bool=false,
                                     seed::Union{Int,Nothing}=nothing)
         # Set random seed if provided
         if seed !== nothing
@@ -75,7 +79,60 @@ mutable struct SpringMassNeuralNetwork
                                 rand(Float64, layer_sizes[i+1], layer_sizes[i])
         end
         
-        new(layer_sizes, num_layers, weights, masses, spring_constants, damping, dt, learning_rate)
+        # Initialize sink springs (connections to ground)
+        sink_springs = Vector{Vector{Float64}}(undef, num_layers)
+        for l in 1:num_layers
+            sink_springs[l] = sink_spring_range[1] .+ 
+                             (sink_spring_range[2] - sink_spring_range[1]) * 
+                             rand(Float64, layer_sizes[l])
+        end
+        
+        # Normalize parameters to [0,1] if requested
+        if normalize
+            # Normalize weights to [-1,1]
+            for i in 1:(num_layers-1)
+                max_abs_weight = maximum(abs.(weights[i]))
+                if max_abs_weight > 0
+                    weights[i] ./= max_abs_weight
+                end
+            end
+            
+            # Normalize masses to [0,1]
+            for l in 1:num_layers
+                min_mass = minimum(masses[l])
+                max_mass = maximum(masses[l])
+                if max_mass > min_mass
+                    masses[l] = (masses[l] .- min_mass) ./ (max_mass - min_mass)
+                else
+                    masses[l] .= 0.5
+                end
+            end
+            
+            # Normalize spring constants to [0,1]
+            for i in 1:(num_layers-1)
+                min_spring = minimum(spring_constants[i])
+                max_spring = maximum(spring_constants[i])
+                if max_spring > min_spring
+                    spring_constants[i] = (spring_constants[i] .- min_spring) ./ 
+                                         (max_spring - min_spring)
+                else
+                    spring_constants[i] .= 0.5
+                end
+            end
+            
+            # Normalize sink springs to [0,1]
+            for l in 1:num_layers
+                min_sink = minimum(sink_springs[l])
+                max_sink = maximum(sink_springs[l])
+                if max_sink > min_sink
+                    sink_springs[l] = (sink_springs[l] .- min_sink) ./ (max_sink - min_sink)
+                else
+                    sink_springs[l] .= 0.5
+                end
+            end
+        end
+        
+        new(layer_sizes, num_layers, weights, masses, spring_constants, sink_springs, damping, dt, learning_rate)
     end
 end
 
@@ -115,6 +172,7 @@ function print_network_info(network::SpringMassNeuralNetwork)
         
         println("  Layer $l ($layer_type): $(network.layer_sizes[l]) neurons")
         println("    Mass range: [$(round(minimum(network.masses[l]), digits=3)), $(round(maximum(network.masses[l]), digits=3))]")
+        println("    Sink spring range: [$(round(minimum(network.sink_springs[l]), digits=3)), $(round(maximum(network.sink_springs[l]), digits=3))]")
         
         if l < network.num_layers
             println("    Connections to next layer: $(network.layer_sizes[l] * network.layer_sizes[l+1])")
@@ -127,7 +185,8 @@ end
 """
     visualize_network(network)
 
-Create a visualization of the network architecture and connection weights.
+Create a visualization of the network architecture and connection weights,
+including 3D representation of sink springs.
 """
 function visualize_network(network::SpringMassNeuralNetwork)
     # Calculate node positions for visualization
@@ -146,17 +205,41 @@ function visualize_network(network::SpringMassNeuralNetwork)
         end
     end
     
-    # Create plot
+    # Create plot with 3D-like floor
     p = plot(size=(800, 600), 
              xlim=(0.5, network.num_layers + 0.5), 
-             ylim=(0.5, max_layer_size + 0.5),
+             ylim=(0, max_layer_size + 1.5),
              legend=false, 
              grid=false, 
              ticks=false, 
              framestyle=:none,
              title="Spring-Mass Neural Network Architecture")
     
-    # Draw connections (edges)
+    # Draw floor (for sink springs visualization)
+    floor_y = 0.5
+    plot!(p, [0.5, network.num_layers + 0.5], [floor_y, floor_y], 
+          color=:gray, linewidth=2, alpha=0.5)
+    
+    # Draw sink springs (connections to floor)
+    for l in 1:network.num_layers
+        for i in 1:network.layer_sizes[l]
+            pos = node_positions[(l, i)]
+            
+            # Calculate sink spring properties
+            spring_constant = network.sink_springs[l][i]
+            # Line thickness proportional to spring constant
+            line_width = 1 + 2 * spring_constant
+            
+            # Draw sink spring as dashed line to floor
+            plot!(p, [pos[1], pos[1]], [pos[2], floor_y], 
+                  linestyle=:dash, 
+                  color=:purple, 
+                  linewidth=line_width, 
+                  alpha=0.4)
+        end
+    end
+    
+    # Draw connections (edges) between layers
     for l in 1:(network.num_layers-1)
         for i in 1:network.layer_sizes[l]
             for j in 1:network.layer_sizes[l+1]
@@ -216,8 +299,11 @@ function visualize_network(network::SpringMassNeuralNetwork)
             label = "Hidden $l"
         end
         
-        annotate!(p, l, 0.8, text(label, 10, :black))
+        annotate!(p, l, max_layer_size + 1, text(label, 10, :black))
     end
+    
+    # Add sink springs explanation
+    annotate!(p, network.num_layers/2, floor_y/2, text("Sink Springs", 8, :purple))
     
     return p
 end
@@ -233,7 +319,9 @@ function demo_network_creation()
                                      learning_rate=0.05,
                                      mass_range=(0.5, 1.5),
                                      spring_constant_range=(0.7, 1.3),
+                                     sink_spring_range=(0.3, 0.9),
                                      weight_range=(-1.0, 1.0),
+                                     normalize=true,  # Normalize parameters to [0,1]
                                      seed=42)
     
     # Print network information
@@ -256,7 +344,7 @@ end
 network = SpringMassNeuralNetwork([2, 4, 3, 1], 
                                  damping=0.1, 
                                  dt=0.01, 
-                                 learning_rate=0.05)
+                                 learning_rate=0.05, normalize=true)
 
 # Print details and visualize
 print_network_info(network)
