@@ -123,30 +123,59 @@ function plot_io_nodes(ts, Elocal, layer_assign; layers=(1,length(layer_assign))
     fig
 end
 
-function static_network_plot(layer_sizes)
-    fig = Figure(size=(600,300))
-    ax = Axis(fig[1,1], aspect=DataAspect(), xticks=[], yticks=[])
-    # place nodes on grid by (layer index, -rank)
-    offsetx = 1
-    idx=1
-    for (ℓ,n) in enumerate(layer_sizes)
+function static_network_plot(layer_sizes::Vector{Int})
+    fig = Figure(resolution = (600, 300))
+    ax = Axis(fig[1,1];
+        aspect         = DataAspect(),    # equal scaling x vs y
+        xticks         = nothing,         # no tick marks
+        yticks         = nothing,         # no tick marks
+        xgridvisible   = false,
+        ygridvisible   = false,
+        showaxis       = false            # no frame/axis decorations
+    )
+
+    # build positions exactly as in the animation:
+    N, layers, neighbors = build_network(layer_sizes)
+    positions = Vector{Point2f}(undef, N)
+    idx = 1
+    for (ℓ, n) in enumerate(layer_sizes)
         ys = range(0, -1, length=n)
         for i in 1:n
-            scatter!(ax, [ℓ], [ys[i]], color=:blue)
-            annotate!(ax, text(string(idx), 10), position=(ℓ,ys[i]))
-            idx+=1
+            positions[idx] = Point2f(ℓ, ys[i])
+            idx += 1
         end
     end
-    # draw springs
-    N, layers, neighbors = build_network(layer_sizes)
+
+    # draw springs between layer ℓ and ℓ+1 only once:
     for i in 1:N, j in neighbors[i]
-        if layers[j]==layers[i]+1  # only forward edges
-            xi = (layers[i], range(0,-1,length=layer_sizes[layers[i]])[ findall(x->x==i-sum(layer_sizes[1:layers[i]-1]),1)[1] ])
-            xj = (layers[j], range(0,-1,length=layer_sizes[layers[j]])[ findall(x->x==j-sum(layer_sizes[1:layers[j]-1]),1)[1] ])
-            lines!(ax, [xi[1],xj[1]], [xi[2],xj[2]], color=:gray)
+        if layers[j] == layers[i] + 1
+            lines!(ax,
+                [positions[i].x, positions[j].x],
+                [positions[i].y, positions[j].y],
+                color = :gray
+            )
         end
     end
-    fig
+
+    # draw the masses / nodes
+    scatter!(ax,
+        getindex.(positions, 1),
+        getindex.(positions, 2),
+        color = :blue,
+        markersize = 12
+    )
+
+    # label each node by its global index
+    for i in 1:N
+        text!(ax, string(i),
+            position = (positions[i].x, positions[i].y),
+            align = (:center, :center),
+            color = :white,
+            fontsize = 14
+        )
+    end
+
+    return fig
 end
 
 # ── 5. GLMakie animation ────────────────────────────────────────────────────
