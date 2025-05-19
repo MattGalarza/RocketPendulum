@@ -45,19 +45,20 @@ end
 """
     activation(x)
 
-Activation function (tanh).
+Non-linear activation function with stronger non-linearity.
 """
 function activation(x)
-    return tanh.(x)
+    # Use a steeper tanh function to create more non-linearity
+    return tanh.(1.5 * x)
 end
 
 """
     activation_derivative(x)
 
-Derivative of the activation function.
+Derivative of the modified activation function.
 """
 function activation_derivative(x)
-    return 1.0 .- tanh.(x).^2
+    return 1.5 * (1.0 .- tanh.(1.5 * x).^2)
 end
 
 """
@@ -265,12 +266,23 @@ function predict(network, input_data; max_time=10.0, convergence_threshold=0.000
         end
     end
     
-    # Apply a sigmoid-like scaling to the output for better 0/1 separation
-    # This helps transform the small output values to more clearly separated results
+    # Apply a more aggressive transformation to better separate 0s and 1s
+    # This is like adding a "snap-through" mechanism to the springs
     outputs = activities[end]
-    scaled_outputs = 1.0 ./ (1.0 .+ exp.(-10.0 * outputs))
     
-    return scaled_outputs
+    # First normalize to approximate range [-1, 1]
+    max_val = maximum(abs.(outputs))
+    if max_val > 0
+        outputs = outputs ./ max_val
+    end
+    
+    # Then apply a steeper sigmoid to create stronger contrast
+    scaled_outputs = 1.0 ./ (1.0 .+ exp.(-15.0 * outputs))
+    
+    # Apply thresholding for cleaner binary outputs
+    binary_outputs = map(x -> x > 0.5 ? 1.0 : 0.0, scaled_outputs)
+    
+    return binary_outputs
 end
 
 """
@@ -286,23 +298,23 @@ function test_xor()
     # Reshape targets to be a column vector for each example
     targets = reshape(targets, (4, 1))
     
-    # Create network with 2 inputs, 4 hidden neurons, 1 output
+    # Create network with 2 inputs, 5 hidden neurons, 1 output
     # Use physics parameters specifically tuned for XOR
-    network = SpringMassNeuralNetwork([2, 4, 1], 
-                                     damping=0.1,  # Lower damping allows more oscillation
-                                     dt=0.02,      # Larger time step for faster dynamics
-                                     learning_rate=0.2) # Higher learning rate for stronger "springs"
+    network = SpringMassNeuralNetwork([2, 5, 1], 
+                                     damping=0.08,  # Even lower damping for more oscillation
+                                     dt=0.03,      # Larger time step for faster dynamics
+                                     learning_rate=0.25) # Higher learning rate for stronger "springs"
     
-    # Initialize weights with slightly larger values
+    # Initialize weights with larger values for more initial energy
     for l in 1:length(network.weights)
-        network.weights[l] = 2.0 * (rand(Float64, size(network.weights[l])...) .- 0.5)
+        network.weights[l] = 2.5 * (rand(Float64, size(network.weights[l])...) .- 0.5)
     end
     
-    # Train the network with more time per example to allow settling
+    # Train the network
     energy_history, error_history = train!(network, inputs, targets, 
                                           num_epochs=100, 
-                                          max_time=10.0, 
-                                          convergence_threshold=0.0005)
+                                          max_time=15.0, 
+                                          convergence_threshold=0.0001)
     
     # Plot training progress
     p = plot(error_history, 
@@ -314,13 +326,75 @@ function test_xor()
             legend=false)
     display(p)
     
-    # Test the network
-    println("\nTesting Spring-Mass Neural Network on XOR:")
+    # Test the network on raw outputs (before thresholding)
+    println("\nTesting Spring-Mass Neural Network on XOR (Raw Outputs):")
+    println("--------------------------------")
+    for i in 1:size(inputs, 1)
+        # Use a custom predict function that doesn't threshold
+        prediction = predict_raw(network, inputs[i, :])
+        println("Input: $(inputs[i, :]) → Raw Output: $(round(prediction[1], digits=4)) (Expected: $(targets[i, 1]))")
+    end
+    
+    # Test the network with thresholded outputs
+    println("\nTesting Spring-Mass Neural Network on XOR (Thresholded Outputs):")
     println("--------------------------------")
     for i in 1:size(inputs, 1)
         prediction = predict(network, inputs[i, :])
-        println("Input: $(inputs[i, :]) → Output: $(round(prediction[1], digits=4)) (Expected: $(targets[i, 1]))")
+        println("Input: $(inputs[i, :]) → Output: $(prediction[1]) (Expected: $(targets[i, 1]))")
     end
+end
+
+"""
+    predict_raw(network, input_data)
+
+Make a prediction without thresholding - for visualization purposes.
+"""
+function predict_raw(network, input_data; max_time=10.0, convergence_threshold=0.0005)
+    # Initialize activities and velocities
+    activities = [zeros(Float64, size) for size in network.layer_sizes]
+    velocities = [zeros(Float64, size) for size in network.layer_sizes]
+    
+    # Set input
+    activities[1] = input_data
+    
+    # Let the system settle to find the output
+    for t in 0:network.dt:max_time
+        # Forward pass
+        predictions, errors = forward_pass(network, activities)
+        
+        # Calculate forces and update all layers except input
+        for l in 2:network.num_layers
+            # Calculate force
+            force = -errors[l]
+            
+            # Add damping
+            force -= network.damping * velocities[l]
+            
+            # Update velocity and position
+            velocities[l] += force * network.dt
+            activities[l] += velocities[l] * network.dt
+        end
+        
+        # Check convergence
+        energy = sum(sum(errors[l].^2) for l in 2:network.num_layers)
+        if energy < convergence_threshold
+            break
+        end
+    end
+    
+    # Apply sigmoid but without thresholding
+    outputs = activities[end]
+    
+    # Normalize
+    max_val = maximum(abs.(outputs))
+    if max_val > 0
+        outputs = outputs ./ max_val
+    end
+    
+    # Scale with sigmoid
+    scaled_outputs = 1.0 ./ (1.0 .+ exp.(-15.0 * outputs))
+    
+    return scaled_outputs
 end
 
 """
