@@ -1,408 +1,416 @@
+using LinearAlgebra
 using Plots
 using Random
 
-mutable struct SpringMassNeuralNetwork
-    layer_sizes::Vector{Int}             # Number of neurons in each layer
-    num_layers::Int                      # Total number of layers
-    weights::Vector{Matrix{Float64}}     # Connection weights between layers
-    masses::Vector{Vector{Float64}}      # Masses of each neuron
-    spring_constants::Vector{Matrix{Float64}} # Spring constants for connections
-    sink_springs::Vector{Vector{Float64}}    # Sink spring constants (to ground)
-    damping::Float64                     # Damping coefficient
-    dt::Float64                          # Time step for simulation
-    learning_rate::Float64               # Learning rate for weight updates
+"""
+    SpringMassNN
+
+A neural network based on spring-mass physics.
+
+# Fields
+- `layers::Int`: Total number of layers including input and output
+- `neurons::Vector{Int}`: Number of neurons per layer
+- `x::Vector{Vector{Float64}}`: Position (activation) of each neuron
+- `v::Vector{Vector{Float64}}`: Velocity of each neuron
+- `a::Vector{Vector{Float64}}`: Acceleration of each neuron
+- `m::Vector{Vector{Float64}}`: Mass of each neuron
+- `K::Vector{Vector{Float64}}`: Sink spring constants
+- `kPrev::Vector{Matrix{Float64}}`: Spring constants from previous layer
+- `kNext::Vector{Matrix{Float64}}`: Spring constants to next layer
+- `c::Vector{Vector{Float64}}`: Damping coefficients
+"""
+mutable struct SpringMassNN
+    layers::Int
+    neurons::Vector{Int}
+    x::Vector{Vector{Float64}}
+    v::Vector{Vector{Float64}}
+    a::Vector{Vector{Float64}}
+    m::Vector{Vector{Float64}}
+    K::Vector{Vector{Float64}}
+    kPrev::Vector{Matrix{Float64}}
+    kNext::Vector{Matrix{Float64}}
+    c::Vector{Vector{Float64}}
+end
+
+"""
+    SpringMassNN(layers::Int, neurons::Vector{Int})
+
+Initialize a spring-mass neural network with the given architecture.
+"""
+function SpringMassNN(layers::Int, neurons::Vector{Int})
+    # Check validity
+    if length(neurons) != layers
+        throw(ArgumentError("The neurons vector must match the number of layers"))
+    end
     
-    """
-        SpringMassNeuralNetwork(layer_sizes; damping=0.2, dt=0.01, learning_rate=0.05)
+    # Initialize positions (activations) with small random values
+    x = [0.1 * randn(neurons[l]) for l in 1:layers]
     
-    Create a new Spring-Mass Neural Network with the specified layer architecture.
+    # Initialize velocities to zero
+    v = [zeros(neurons[l]) for l in 1:layers]
     
-    Parameters:
-    - `layer_sizes`: Vector of integers specifying the number of neurons in each layer
-    - `damping`: Damping coefficient for the spring-mass system
-    - `dt`: Time step for numerical integration
-    - `learning_rate`: Learning rate for weight updates
-    - `normalize`: Whether to normalize all parameters to [0,1] range
+    # Initialize accelerations to zero
+    a = [zeros(neurons[l]) for l in 1:layers]
     
-    Example:
-    ```julia
-    # Create a network with 2 inputs, 5 neurons in first hidden layer, 
-    # 3 neurons in second hidden layer, and 1 output
-    network = SpringMassNeuralNetwork([2, 5, 3, 1])
-    ```
-    """
-    function SpringMassNeuralNetwork(layer_sizes::Vector{Int}; 
-                                    damping::Float64=0.2, 
-                                    dt::Float64=0.01, 
-                                    learning_rate::Float64=0.05,
-                                    mass_range::Tuple{Float64,Float64}=(0.8, 1.2),
-                                    spring_constant_range::Tuple{Float64,Float64}=(0.8, 1.2),
-                                    sink_spring_range::Tuple{Float64,Float64}=(0.5, 1.0),
-                                    weight_range::Tuple{Float64,Float64}=(-0.5, 0.5),
-                                    normalize::Bool=false,
-                                    seed::Union{Int,Nothing}=nothing)
-                                    
-        # Set random seed if provided
-        if seed !== nothing
-            Random.seed!(seed)
+    # Initialize masses (could be learned but fixed for simplicity)
+    m = [ones(neurons[l]) for l in 1:layers]
+    
+    # Initialize sink spring constants (biases)
+    K = [rand(Float64, neurons[l]) * 0.4 .+ 0.1 for l in 1:layers]
+    
+    # Initialize coupling spring constants (weights)
+    # From previous layer to current
+    kPrev = [randn(neurons[l], neurons[l-1]) * 0.5 for l in 2:layers]
+    
+    # From current layer to next
+    kNext = [randn(neurons[l], neurons[l+1]) * 0.5 for l in 1:layers-1]
+    
+    # Initialize small damping coefficients
+    c = [fill(0.05, neurons[l]) for l in 1:layers]
+    
+    SpringMassNN(layers, neurons, x, v, a, m, K, kPrev, kNext, c)
+end
+
+"""
+    kinetic_energy(nn::SpringMassNN, l::Int, i::Int)
+
+Calculate kinetic energy for a node.
+"""
+function kinetic_energy(nn::SpringMassNN, l::Int, i::Int)
+    0.5 * nn.m[l][i] * nn.v[l][i]^2
+end
+
+"""
+    sink_energy(nn::SpringMassNN, l::Int, i::Int)
+
+Calculate sink potential energy for a node.
+"""
+function sink_energy(nn::SpringMassNN, l::Int, i::Int)
+    0.5 * nn.K[l][i] * nn.x[l][i]^2
+end
+
+"""
+    prev_layer_energy(nn::SpringMassNN, l::Int, i::Int)
+
+Calculate coupling energy from previous layer.
+"""
+function prev_layer_energy(nn::SpringMassNN, l::Int, i::Int)
+    if l > 1
+        energy = 0.0
+        for n in 1:nn.neurons[l-1]
+            energy += 0.5 * nn.kPrev[l-1][i, n] * (nn.x[l][i] - nn.x[l-1][n])^2
         end
-        
-        num_layers = length(layer_sizes)
-        
-        if num_layers < 2
-            error("Network must have at least 2 layers (input and output)")
+        return energy
+    else
+        return 0.0
+    end
+end
+
+"""
+    next_layer_energy(nn::SpringMassNN, l::Int, i::Int)
+
+Calculate coupling energy to next layer.
+"""
+function next_layer_energy(nn::SpringMassNN, l::Int, i::Int)
+    if l < nn.layers
+        energy = 0.0
+        for m in 1:nn.neurons[l+1]
+            energy += 0.5 * nn.kNext[l][i, m] * (nn.x[l+1][m] - nn.x[l][i])^2
         end
-        
-        # Initialize weights randomly
-        weights = Vector{Matrix{Float64}}(undef, num_layers-1)
-        for i in 1:(num_layers-1)
-            weights[i] = weight_range[1] .+ (weight_range[2] - weight_range[1]) * 
-                         rand(Float64, layer_sizes[i+1], layer_sizes[i])
+        return energy
+    else
+        return 0.0
+    end
+end
+
+"""
+    node_energy(nn::SpringMassNN, l::Int, i::Int)
+
+Calculate total energy for a node.
+"""
+function node_energy(nn::SpringMassNN, l::Int, i::Int)
+    kinetic_energy(nn, l, i) + sink_energy(nn, l, i) + 
+    prev_layer_energy(nn, l, i) + next_layer_energy(nn, l, i)
+end
+
+"""
+    network_energy(nn::SpringMassNN)
+
+Calculate total network energy.
+"""
+function network_energy(nn::SpringMassNN)
+    energy = 0.0
+    for l in 1:nn.layers
+        for i in 1:nn.neurons[l]
+            energy += node_energy(nn, l, i)
         end
-        
-        # Initialize physical parameters - masses for each neuron
-        masses = Vector{Vector{Float64}}(undef, num_layers)
-        for l in 1:num_layers
-            masses[l] = mass_range[1] .+ (mass_range[2] - mass_range[1]) * 
-                        rand(Float64, layer_sizes[l])
-        end
-        
-        # Spring constants for connections between layers
-        spring_constants = Vector{Matrix{Float64}}(undef, num_layers-1)
-        for i in 1:(num_layers-1)
-            spring_constants[i] = spring_constant_range[1] .+ 
-                                (spring_constant_range[2] - spring_constant_range[1]) * 
-                                rand(Float64, layer_sizes[i+1], layer_sizes[i])
-        end
-        
-        # Initialize sink springs (connections to ground)
-        sink_springs = Vector{Vector{Float64}}(undef, num_layers)
-        for l in 1:num_layers
-            sink_springs[l] = sink_spring_range[1] .+ 
-                             (sink_spring_range[2] - sink_spring_range[1]) * 
-                             rand(Float64, layer_sizes[l])
-        end
-        
-        # Normalize parameters to [0,1] if requested
-        if normalize
-            # Normalize weights to [-1,1]
-            for i in 1:(num_layers-1)
-                max_abs_weight = maximum(abs.(weights[i]))
-                if max_abs_weight > 0
-                    weights[i] ./= max_abs_weight
+    end
+    energy
+end
+
+"""
+    calculate_forces!(nn::SpringMassNN)
+
+Calculate forces on each node and return a vector of vectors.
+"""
+function calculate_forces!(nn::SpringMassNN)
+    forces = [zeros(nn.neurons[l]) for l in 1:nn.layers]
+    
+    for l in 1:nn.layers
+        for i in 1:nn.neurons[l]
+            # Force from sink potential
+            forces[l][i] = -nn.K[l][i] * nn.x[l][i]
+            
+            # Force from previous layer coupling
+            if l > 1
+                for n in 1:nn.neurons[l-1]
+                    forces[l][i] -= nn.kPrev[l-1][i, n] * (nn.x[l][i] - nn.x[l-1][n])
                 end
             end
             
-            # Normalize masses to [0,1]
-            for l in 1:num_layers
-                min_mass = minimum(masses[l])
-                max_mass = maximum(masses[l])
-                if max_mass > min_mass
-                    masses[l] = (masses[l] .- min_mass) ./ (max_mass - min_mass)
-                else
-                    masses[l] .= 0.5
+            # Force from next layer coupling
+            if l < nn.layers
+                for m in 1:nn.neurons[l+1]
+                    forces[l][i] -= nn.kNext[l][i, m] * (nn.x[l][i] - nn.x[l+1][m])
                 end
             end
             
-            # Normalize spring constants to [0,1]
-            for i in 1:(num_layers-1)
-                min_spring = minimum(spring_constants[i])
-                max_spring = maximum(spring_constants[i])
-                if max_spring > min_spring
-                    spring_constants[i] = (spring_constants[i] .- min_spring) ./ 
-                                         (max_spring - min_spring)
-                else
-                    spring_constants[i] .= 0.5
+            # Damping force
+            forces[l][i] -= nn.c[l][i] * nn.v[l][i]
+        end
+    end
+    
+    forces
+end
+
+"""
+    calculate_accelerations!(nn::SpringMassNN, forces)
+
+Calculate accelerations from forces.
+"""
+function calculate_accelerations!(nn::SpringMassNN, forces)
+    accelerations = [zeros(nn.neurons[l]) for l in 1:nn.layers]
+    
+    for l in 1:nn.layers
+        for i in 1:nn.neurons[l]
+            accelerations[l][i] = forces[l][i] / nn.m[l][i]
+        end
+    end
+    
+    accelerations
+end
+
+"""
+    velocity_verlet_step!(nn::SpringMassNN, dt::Float64)
+
+Perform one step of velocity Verlet integration.
+"""
+function velocity_verlet_step!(nn::SpringMassNN, dt::Float64)
+    # First half of velocity update
+    for l in 1:nn.layers
+        for i in 1:nn.neurons[l]
+            nn.v[l][i] += 0.5 * nn.a[l][i] * dt
+        end
+    end
+    
+    # Position update
+    for l in 1:nn.layers
+        for i in 1:nn.neurons[l]
+            nn.x[l][i] += nn.v[l][i] * dt
+        end
+    end
+    
+    # Calculate new forces and accelerations
+    forces = calculate_forces!(nn)
+    new_accel = calculate_accelerations!(nn, forces)
+    
+    # Second half of velocity update
+    for l in 1:nn.layers
+        for i in 1:nn.neurons[l]
+            nn.v[l][i] += 0.5 * new_accel[l][i] * dt
+            nn.a[l][i] = new_accel[l][i]
+        end
+    end
+end
+
+"""
+    update_spring_constants!(nn::SpringMassNN, learning_rate::Float64)
+
+Update spring constants based on energy gradients.
+"""
+function update_spring_constants!(nn::SpringMassNN, learning_rate::Float64)
+    # Update sink spring constants
+    for l in 1:nn.layers
+        for i in 1:nn.neurons[l]
+            delta_K = -learning_rate * nn.x[l][i]^2
+            nn.K[l][i] += delta_K
+        end
+    end
+    
+    # Update coupling spring constants from previous layer
+    for l in 2:nn.layers
+        for i in 1:nn.neurons[l]
+            for n in 1:nn.neurons[l-1]
+                delta_prev = -learning_rate * (nn.x[l][i] - nn.x[l-1][n])^2
+                nn.kPrev[l-1][i, n] += delta_prev
+            end
+        end
+    end
+    
+    # Update coupling spring constants to next layer
+    for l in 1:nn.layers-1
+        for i in 1:nn.neurons[l]
+            for m in 1:nn.neurons[l+1]
+                delta_next = -learning_rate * (nn.x[l+1][m] - nn.x[l][i])^2
+                nn.kNext[l][i, m] += delta_next
+            end
+        end
+    end
+end
+
+"""
+    set_input!(nn::SpringMassNN, input_values::Vector{Float64})
+
+Set input layer values and fix velocities.
+"""
+function set_input!(nn::SpringMassNN, input_values::Vector{Float64})
+    if length(input_values) != nn.neurons[1]
+        throw(ArgumentError("Input length doesn't match network input layer size"))
+    end
+    
+    for i in 1:nn.neurons[1]
+        nn.x[1][i] = input_values[i]
+        nn.v[1][i] = 0.0  # Fix velocity of input nodes
+    end
+end
+
+"""
+    set_target!(nn::SpringMassNN, target_values::Vector{Float64})
+
+Set target values for output layer.
+"""
+function set_target!(nn::SpringMassNN, target_values::Vector{Float64})
+    if length(target_values) != nn.neurons[end]
+        throw(ArgumentError("Target length doesn't match network output layer size"))
+    end
+    
+    for i in 1:nn.neurons[end]
+        # Strengthen the sink constant to pull toward target
+        nn.K[end][i] = 10.0
+        nn.x[end][i] = target_values[i]
+    end
+end
+
+"""
+    predict(nn::SpringMassNN, input::Vector{Float64}, steps::Int=500, dt::Float64=0.01)
+
+Run the network forward and return the output layer activations.
+"""
+function predict(nn::SpringMassNN, input::Vector{Float64}, steps::Int=500, dt::Float64=0.01)
+    # Set input
+    set_input!(nn, input)
+    
+    # Let system evolve
+    for _ in 1:steps
+        velocity_verlet_step!(nn, dt)
+    end
+    
+    # Return output layer activations
+    return copy(nn.x[end])
+end
+
+"""
+    train!(nn::SpringMassNN, inputs::Vector{Vector{Float64}}, 
+           targets::Vector{Vector{Float64}}, epochs::Int=100,
+           relaxation_steps::Int=500, dt::Float64=0.01, learning_rate::Float64=0.001)
+
+Train the spring-mass neural network on the given dataset.
+"""
+function train!(nn::SpringMassNN, inputs::Vector{Vector{Float64}}, 
+                targets::Vector{Vector{Float64}}, epochs::Int=100,
+                relaxation_steps::Int=500, dt::Float64=0.01, learning_rate::Float64=0.001)
+    
+    energy_history = Float64[]
+    errors_history = Float64[]
+    
+    for epoch in 1:epochs
+        epoch_error = 0.0
+        
+        # Loop through training examples
+        for example in 1:length(inputs)
+            # Set input
+            set_input!(nn, inputs[example])
+            
+            # Let system evolve
+            for step in 1:relaxation_steps
+                velocity_verlet_step!(nn, dt)
+                
+                # Record energy on last step
+                if step == relaxation_steps
+                    push!(energy_history, network_energy(nn))
                 end
             end
             
-            # Normalize sink springs to [0,1]
-            for l in 1:num_layers
-                min_sink = minimum(sink_springs[l])
-                max_sink = maximum(sink_springs[l])
-                if max_sink > min_sink
-                    sink_springs[l] = (sink_springs[l] .- min_sink) ./ (max_sink - min_sink)
-                else
-                    sink_springs[l] .= 0.5
-                end
-            end
+            # Calculate error
+            error = sum((nn.x[end][i] - targets[example][i])^2 for i in 1:nn.neurons[end])
+            epoch_error += error
+            
+            # Set target and update spring constants
+            set_target!(nn, targets[example])
+            update_spring_constants!(nn, learning_rate)
         end
         
-        new(layer_sizes, num_layers, weights, masses, spring_constants, sink_springs, damping, dt, learning_rate)
+        # Record error
+        push!(errors_history, epoch_error)
+        
+        # Print progress
+        if epoch % 10 == 0
+            println("Epoch $epoch: Error = $epoch_error")
+        end
     end
+    
+    return errors_history, energy_history
 end
 
 """
-    print_network_info(network)
+    test_network(nn::SpringMassNN, inputs::Vector{Vector{Float64}}, 
+                targets::Vector{Vector{Float64}})
 
-Print detailed information about the network architecture and parameters.
+Test the network on the given dataset and print results.
 """
-function print_network_info(network::SpringMassNeuralNetwork)
-    println("Spring-Mass Neural Network")
-    println("==========================")
-    println("Architecture: ", join(network.layer_sizes, " → "))
-    println("Number of layers: ", network.num_layers)
+function test_network(nn::SpringMassNN, inputs::Vector{Vector{Float64}}, 
+                     targets::Vector{Vector{Float64}})
+    println("Testing Network Results:")
+    println("-----------------------")
     
-    total_neurons = sum(network.layer_sizes)
-    total_connections = sum(network.layer_sizes[1:end-1] .* network.layer_sizes[2:end])
-    
-    println("Total neurons: ", total_neurons)
-    println("Total connections: ", total_connections)
-    println()
-    
-    println("Physical Parameters:")
-    println("  Damping coefficient: ", network.damping)
-    println("  Time step (dt): ", network.dt)
-    println("  Learning rate: ", network.learning_rate)
-    println()
-    
-    println("Layer Details:")
-    for l in 1:network.num_layers
-        if l == 1
-            layer_type = "Input"
-        elseif l == network.num_layers
-            layer_type = "Output"
-        else
-            layer_type = "Hidden"
-        end
-        
-        println("  Layer $l ($layer_type): $(network.layer_sizes[l]) neurons")
-        println("    Mass range: [$(round(minimum(network.masses[l]), digits=3)), $(round(maximum(network.masses[l]), digits=3))]")
-        println("    Sink spring range: [$(round(minimum(network.sink_springs[l]), digits=3)), $(round(maximum(network.sink_springs[l]), digits=3))]")
-        
-        if l < network.num_layers
-            println("    Connections to next layer: $(network.layer_sizes[l] * network.layer_sizes[l+1])")
-            println("    Weight range: [$(round(minimum(network.weights[l]), digits=3)), $(round(maximum(network.weights[l]), digits=3))]")
-            println("    Spring constant range: [$(round(minimum(network.spring_constants[l]), digits=3)), $(round(maximum(network.spring_constants[l]), digits=3))]")
-        end
+    for i in 1:length(inputs)
+        prediction = predict(nn, inputs[i])
+        println("Input: $(inputs[i]) → Output: $prediction (Expected: $(targets[i]))")
     end
 end
 
-"""
-    visualize_network(network; angle=15)
-
-Create a visualization of the network architecture and connection weights,
-including 3D representation of sink springs. The network can be rotated by
-specifying an angle in degrees.
-
-Parameters:
-- network: SpringMassNeuralNetwork instance
-- angle: Rotation angle in degrees for 3D-like perspective
-"""
-function visualize_network(network::SpringMassNeuralNetwork; angle=15)
-    # Calculate node positions for visualization
-    max_layer_size = maximum(network.layer_sizes)
-    node_positions = Dict()
+# Example usage for XOR problem
+function run_xor_example()
+    # Create network
+    nn = SpringMassNN(3, [2, 3, 1])
     
-    # Set up perspective scaling factor
-    perspective_scale = 0.6  # Controls the amount of "depth" perspective
-    angle_rad = angle * π / 180  # Convert angle to radians
+    # Define XOR training data
+    inputs = [[0.0, 0.0], [0.0, 1.0], [1.0, 0.0], [1.0, 1.0]]
+    targets = [[0.0], [1.0], [1.0], [0.0]]
     
-    # Create a larger plot area for the rotated view
-    horizontal_padding = 1.0
-    vertical_padding = 1.5
-    plot_width = network.num_layers + 2*horizontal_padding
-    plot_height = max_layer_size + 2*vertical_padding
+    # Train network
+    errors, energies = train!(nn, inputs, targets, 100, 500, 0.01, 0.001)
     
-    # Calculate x and y coordinates for each node with perspective rotation
-    for l in 1:network.num_layers
-        layer_size = network.layer_sizes[l]
-        for i in 1:layer_size
-            # Base positions (centered in layer)
-            base_x = l
-            base_y = (max_layer_size - layer_size) / 2 + i
-            
-            # Apply perspective rotation
-            # Move nodes to the right as they go higher for perspective effect
-            x = base_x + (base_y - (max_layer_size/2)) * sin(angle_rad) * perspective_scale
-            y = base_y
-            
-            node_positions[(l, i)] = (x, y)
-        end
-    end
+    # Test network
+    test_network(nn, inputs, targets)
     
-    # Create plot with 3D-like floor
-    p = plot(size=(900, 700), 
-             xlim=(0.5 - horizontal_padding, network.num_layers + 0.5 + horizontal_padding), 
-             ylim=(0, plot_height),
-             legend=false, 
-             grid=false, 
-             ticks=false, 
-             framestyle=:none,
-             title="Spring-Mass Neural Network Architecture")
+    # Visualize training progress
+    p1 = plot(errors, xlabel="Epoch", ylabel="Error", title="Training Error", legend=false)
+    p2 = plot(energies, xlabel="Example", ylabel="Energy", title="Network Energy", legend=false)
+    plot(p1, p2, layout=(2,1), size=(800, 600))
     
-    # Draw floor (for sink springs visualization) - with perspective
-    floor_y = 0.5
-    floor_x_start = 0.5 - horizontal_padding * sin(angle_rad)
-    floor_x_end = network.num_layers + 0.5 + horizontal_padding * sin(angle_rad)
-    plot!(p, [floor_x_start, floor_x_end], [floor_y, floor_y], 
-          color=:gray, linewidth=2, alpha=0.7)
-    
-    # Draw sink springs (connections to floor)
-    for l in 1:network.num_layers
-        for i in 1:network.layer_sizes[l]
-            pos = node_positions[(l, i)]
-            
-            # Calculate sink spring properties
-            spring_constant = network.sink_springs[l][i]
-            # Line thickness proportional to spring constant
-            line_width = 1 + 2 * spring_constant
-            
-            # Draw sink spring as dashed line to floor with slight angle
-            # for 3D perspective
-            floor_x = pos[1] - 0.1 * sin(angle_rad)  # Slight offset for 3D feel
-            
-            # Purple dashed line for sink spring
-            plot!(p, [pos[1], floor_x], [pos[2], floor_y], 
-                  linestyle=:dash, 
-                  color=:purple, 
-                  linewidth=line_width, 
-                  alpha=0.5)
-        end
-    end
-    
-    # Draw connections (edges) between layers - draw back to front for proper overlap
-    for l in 1:(network.num_layers-1)
-        for i in 1:network.layer_sizes[l]
-            for j in 1:network.layer_sizes[l+1]
-                src = node_positions[(l, i)]
-                dst = node_positions[(l+1, j)]
-                
-                # Calculate color and width based on weight
-                weight = network.weights[l][j, i]
-                line_color = weight > 0 ? :blue : :red
-                
-                # Make line width proportional to weight magnitude 
-                # but ensure it's visible
-                line_width = 1 + 4 * abs(weight)
-                
-                # For perspective effect, make connections at the top slightly more transparent
-                alpha_val = 0.7 - 0.2 * ((src[2] + dst[2]) / (2 * max_layer_size))
-                
-                # Draw line with subtle 3D curve effect
-                # Calculate control point for Bezier curve to add subtle 3D effect
-                ctrl_x = (src[1] + dst[1]) / 2 + 0.1 * sin(angle_rad)
-                ctrl_y = (src[2] + dst[2]) / 2
-                
-                # Create points for the curve
-                curve_points = 20
-                t_values = range(0, 1, length=curve_points)
-                curve_x = [(1-t)^2 * src[1] + 2*(1-t)*t * ctrl_x + t^2 * dst[1] for t in t_values]
-                curve_y = [(1-t)^2 * src[2] + 2*(1-t)*t * ctrl_y + t^2 * dst[2] for t in t_values]
-                
-                # Draw the connection as a subtle curve
-                plot!(p, curve_x, curve_y, 
-                     linewidth=line_width, 
-                     color=line_color, 
-                     alpha=alpha_val)
-            end
-        end
-    end
-    
-    # Draw nodes (from back to front for proper overlap)
-    for l in 1:network.num_layers
-        # Determine node color based on layer type
-        if l == 1
-            node_color = :orange  # Input layer
-        elseif l == network.num_layers
-            node_color = :green   # Output layer
-        else
-            node_color = :lightblue  # Hidden layers
-        end
-        
-        # Draw nodes for this layer
-        for i in 1:network.layer_sizes[l]
-            pos = node_positions[(l, i)]
-            
-            # Node size based on mass - larger mass = larger node
-            mass = network.masses[l][i]
-            node_size = 7 + 6 * mass  # Enhanced size for better visibility
-            
-            # Draw node with 3D effect (shadow and highlight)
-            # Shadow first (slight offset)
-            scatter!(p, [pos[1]+0.02], [pos[2]-0.02], 
-                   markersize=node_size, 
-                   color=:black,
-                   markerstrokewidth=0,
-                   alpha=0.3)
-                   
-            # Main node
-            scatter!(p, [pos[1]], [pos[2]], 
-                   markersize=node_size, 
-                   color=node_color,
-                   markerstrokewidth=1,
-                   markerstrokecolor=:black)
-            
-            # Add node labels (optional)
-            # annotate!(p, pos[1], pos[2], text("$l,$i", 6, :white))
-        end
-    end
-    
-    # Add layer labels with perspective adjustment
-    for l in 1:network.num_layers
-        if l == 1
-            label = "Input"
-        elseif l == network.num_layers
-            label = "Output"
-        else
-            label = "Hidden $l"
-        end
-        
-        # Adjust label position based on perspective
-        label_x = l + max_layer_size * 0.05 * sin(angle_rad)
-        annotate!(p, label_x, max_layer_size + vertical_padding/2, text(label, 10, :black))
-    end
-    
-    # Add sink springs explanation
-    annotate!(p, network.num_layers/2, floor_y/2, text("Sink Springs", 8, :purple))
-    
-    return p
+    return nn, p1, p2
 end
 
-"""
-Create a test network and visualize it.
-"""
-function demo_network_creation()
-    # Create a network with 2 inputs, two hidden layers (4 and 3 neurons), and 1 output
-    network = SpringMassNeuralNetwork([2, 4, 3, 1], 
-                                     damping=0.1, 
-                                     dt=0.01, 
-                                     learning_rate=0.05,
-                                     mass_range=(0.5, 1.5),
-                                     spring_constant_range=(0.7, 1.3),
-                                     sink_spring_range=(0.3, 0.9),
-                                     weight_range=(-1.0, 1.0),
-                                     normalize=true,  # Normalize parameters to [0,1]
-                                     seed=42)
-    
-    # Print network information
-    print_network_info(network)
-    
-    # Visualize the network with different rotation angles
-    angles = [0, 15, 30]
-    plots = []
-    
-    for angle in angles
-        p = visualize_network(network, angle=angle)
-        push!(plots, p)
-    end
-    
-    # Display all views side by side
-    combined_plot = plot(plots..., layout=(1, length(angles)), size=(1200, 500))
-    title!(combined_plot, "Spring-Mass Neural Network - Different Perspective Views")
-    display(combined_plot)
-    
-    # Also display the best individual view (30 degrees)
-    best_view = visualize_network(network, angle=30)
-    display(best_view)
-    
-    return network
-end
-
-# Run the demo if this script is executed directly
-if abspath(PROGRAM_FILE) == @__FILE__
-    demo_network_creation()
-end
-
-
-visualize_network(network, angle=15)  # 30-degree rotation for best view
+# Run the example
+nn, error_plot, energy_plot = run_xor_example()
