@@ -1,11 +1,6 @@
 using Plots
 using Random
 
-"""
-    SpringMassNeuralNetwork
-
-A Neural Network based on spring-mass physical system dynamics.
-"""
 mutable struct SpringMassNeuralNetwork
     layer_sizes::Vector{Int}             # Number of neurons in each layer
     num_layers::Int                      # Total number of layers
