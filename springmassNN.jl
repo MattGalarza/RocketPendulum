@@ -7,35 +7,72 @@ using Random
 A Neural Network based on spring-mass physical system dynamics.
 """
 mutable struct SpringMassNeuralNetwork
-    layer_sizes::Vector{Int}
-    num_layers::Int
-    weights::Vector{Matrix{Float64}}
-    masses::Vector{Vector{Float64}}
-    spring_constants::Vector{Matrix{Float64}}
-    damping::Float64
-    dt::Float64
-    learning_rate::Float64
+    layer_sizes::Vector{Int}             # Number of neurons in each layer
+    num_layers::Int                      # Total number of layers
+    weights::Vector{Matrix{Float64}}     # Connection weights between layers
+    masses::Vector{Vector{Float64}}      # Masses of each neuron
+    spring_constants::Vector{Matrix{Float64}} # Spring constants for connections
+    damping::Float64                     # Damping coefficient
+    dt::Float64                          # Time step for simulation
+    learning_rate::Float64               # Learning rate for weight updates
     
+    """
+        SpringMassNeuralNetwork(layer_sizes; damping=0.2, dt=0.01, learning_rate=0.05)
+    
+    Create a new Spring-Mass Neural Network with the specified layer architecture.
+    
+    Parameters:
+    - `layer_sizes`: Vector of integers specifying the number of neurons in each layer
+    - `damping`: Damping coefficient for the spring-mass system
+    - `dt`: Time step for numerical integration
+    - `learning_rate`: Learning rate for weight updates
+    
+    Example:
+    ```julia
+    # Create a network with 2 inputs, 5 neurons in first hidden layer, 
+    # 3 neurons in second hidden layer, and 1 output
+    network = SpringMassNeuralNetwork([2, 5, 3, 1])
+    ```
+    """
     function SpringMassNeuralNetwork(layer_sizes::Vector{Int}; 
                                     damping::Float64=0.2, 
                                     dt::Float64=0.01, 
-                                    learning_rate::Float64=0.05)
+                                    learning_rate::Float64=0.05,
+                                    mass_range::Tuple{Float64,Float64}=(0.8, 1.2),
+                                    spring_constant_range::Tuple{Float64,Float64}=(0.8, 1.2),
+                                    weight_range::Tuple{Float64,Float64}=(-0.5, 0.5),
+                                    seed::Union{Int,Nothing}=nothing)
+        # Set random seed if provided
+        if seed !== nothing
+            Random.seed!(seed)
+        end
+        
         num_layers = length(layer_sizes)
+        
+        if num_layers < 2
+            error("Network must have at least 2 layers (input and output)")
+        end
         
         # Initialize weights randomly
         weights = Vector{Matrix{Float64}}(undef, num_layers-1)
         for i in 1:(num_layers-1)
-            weights[i] = rand(Float64, layer_sizes[i+1], layer_sizes[i]) .- 0.5
+            weights[i] = weight_range[1] .+ (weight_range[2] - weight_range[1]) * 
+                         rand(Float64, layer_sizes[i+1], layer_sizes[i])
         end
         
-        # Initialize physical parameters
-        # For simplicity, all masses are set to 1
-        masses = [ones(Float64, size) for size in layer_sizes]
+        # Initialize physical parameters - masses for each neuron
+        masses = Vector{Vector{Float64}}(undef, num_layers)
+        for l in 1:num_layers
+            masses[l] = mass_range[1] .+ (mass_range[2] - mass_range[1]) * 
+                        rand(Float64, layer_sizes[l])
+        end
         
-        # Spring constants could be adjusted, but set to 1 for now
+        # Spring constants for connections between layers
         spring_constants = Vector{Matrix{Float64}}(undef, num_layers-1)
         for i in 1:(num_layers-1)
-            spring_constants[i] = ones(Float64, layer_sizes[i+1], layer_sizes[i])
+            spring_constants[i] = spring_constant_range[1] .+ 
+                                (spring_constant_range[2] - spring_constant_range[1]) * 
+                                rand(Float64, layer_sizes[i+1], layer_sizes[i])
         end
         
         new(layer_sizes, num_layers, weights, masses, spring_constants, damping, dt, learning_rate)
@@ -43,549 +80,184 @@ mutable struct SpringMassNeuralNetwork
 end
 
 """
-    activation(x)
+    print_network_info(network)
 
-Non-linear activation function with stronger non-linearity.
+Print detailed information about the network architecture and parameters.
 """
-function activation(x)
-    # Use a steeper tanh function to create more non-linearity
-    return tanh.(1.5 * x)
-end
-
-"""
-    activation_derivative(x)
-
-Derivative of the modified activation function.
-"""
-function activation_derivative(x)
-    return 1.5 * (1.0 .- tanh.(1.5 * x).^2)
-end
-
-"""
-    forward_pass(network, activities)
-
-Calculate predictions and errors for all layers.
-"""
-function forward_pass(network, activities)
-    predictions = [zeros(Float64, size(a)) for a in activities]
-    errors = [zeros(Float64, size(a)) for a in activities]
+function print_network_info(network::SpringMassNeuralNetwork)
+    println("Spring-Mass Neural Network")
+    println("==========================")
+    println("Architecture: ", join(network.layer_sizes, " → "))
+    println("Number of layers: ", network.num_layers)
     
-    # Calculate predictions for each layer
-    for l in 2:network.num_layers
-        # Apply activation to previous layer activities
-        prev_activations = activation(activities[l-1])
-        
-        # Compute weighted sum
-        predictions[l] = network.weights[l-1] * prev_activations
-        
-        # Calculate error
-        errors[l] = activities[l] - predictions[l]
-    end
+    total_neurons = sum(network.layer_sizes)
+    total_connections = sum(network.layer_sizes[1:end-1] .* network.layer_sizes[2:end])
     
-    return predictions, errors
-end
-
-"""
-    calculate_energy(network, activities, predictions, velocities)
-
-Calculate the system's total energy.
-"""
-function calculate_energy(network, activities, predictions, velocities)
-    energy = 0.0
+    println("Total neurons: ", total_neurons)
+    println("Total connections: ", total_connections)
+    println()
     
-    # Kinetic energy
+    println("Physical Parameters:")
+    println("  Damping coefficient: ", network.damping)
+    println("  Time step (dt): ", network.dt)
+    println("  Learning rate: ", network.learning_rate)
+    println()
+    
+    println("Layer Details:")
     for l in 1:network.num_layers
-        energy += 0.5 * sum(network.masses[l] .* velocities[l].^2)
-    end
-    
-    # Potential energy from prediction errors
-    for l in 2:network.num_layers
-        energy += 0.5 * sum((activities[l] - predictions[l]).^2)
-    end
-    
-    return energy
-end
-
-"""
-    update_state!(activities, velocities, network, predictions, errors)
-
-Update neuron activities and velocities based on physics.
-"""
-function update_state!(activities, velocities, network, predictions, errors)
-    # Update hidden layers (not input or output during training)
-    for l in 2:(network.num_layers-1)
-        # Calculate forces on neurons
-        force = -errors[l]  # Error correction force
+        if l == 1
+            layer_type = "Input"
+        elseif l == network.num_layers
+            layer_type = "Output"
+        else
+            layer_type = "Hidden"
+        end
         
-        # Force from next layer errors
+        println("  Layer $l ($layer_type): $(network.layer_sizes[l]) neurons")
+        println("    Mass range: [$(round(minimum(network.masses[l]), digits=3)), $(round(maximum(network.masses[l]), digits=3))]")
+        
         if l < network.num_layers
-            prev_activations = activation(activities[l])
-            next_layer_influence = transpose(network.weights[l]) * errors[l+1]
-            force += next_layer_influence
+            println("    Connections to next layer: $(network.layer_sizes[l] * network.layer_sizes[l+1])")
+            println("    Weight range: [$(round(minimum(network.weights[l]), digits=3)), $(round(maximum(network.weights[l]), digits=3))]")
+            println("    Spring constant range: [$(round(minimum(network.spring_constants[l]), digits=3)), $(round(maximum(network.spring_constants[l]), digits=3))]")
         end
-        
-        # Add damping force
-        force -= network.damping * velocities[l]
-        
-        # Apply F = ma to get acceleration (assuming mass = 1)
-        acceleration = force ./ network.masses[l]
-        
-        # Update velocity
-        velocities[l] += acceleration * network.dt
-        
-        # Update position/activity
-        activities[l] += velocities[l] * network.dt
     end
 end
 
 """
-    update_weights!(network, activities, errors)
+    visualize_network(network)
 
-Update weights based on errors and activations.
+Create a visualization of the network architecture and connection weights.
 """
-function update_weights!(network, activities, errors)
+function visualize_network(network::SpringMassNeuralNetwork)
+    # Calculate node positions for visualization
+    max_layer_size = maximum(network.layer_sizes)
+    node_positions = Dict()
+    
+    # Calculate x and y coordinates for each node
+    for l in 1:network.num_layers
+        layer_size = network.layer_sizes[l]
+        for i in 1:layer_size
+            # Horizontal position (by layer)
+            x = l
+            # Vertical position (centered in layer)
+            y = (max_layer_size - layer_size) / 2 + i
+            node_positions[(l, i)] = (x, y)
+        end
+    end
+    
+    # Create plot
+    p = plot(size=(800, 600), 
+             xlim=(0.5, network.num_layers + 0.5), 
+             ylim=(0.5, max_layer_size + 0.5),
+             legend=false, 
+             grid=false, 
+             ticks=false, 
+             framestyle=:none,
+             title="Spring-Mass Neural Network Architecture")
+    
+    # Draw connections (edges)
     for l in 1:(network.num_layers-1)
-        # Hebbian-like learning rule
-        prev_activations = activation(activities[l])
-        
-        # Weight change proportional to error and activation
-        delta_w = network.learning_rate * errors[l+1] * transpose(prev_activations)
-        
-        # Add a small oscillatory component to help escape local minima
-        # This is like giving the springs a small "shake" to find better configurations
-        oscillation = 0.05 * network.learning_rate * (rand(size(delta_w)...) .- 0.5)
-        
-        network.weights[l] += delta_w .+ oscillation
-    end
-end
-
-"""
-    train!(network, inputs, targets; num_epochs=50, max_time=5.0, convergence_threshold=0.001)
-
-Train the network.
-"""
-function train!(network, inputs, targets; 
-                num_epochs=50, max_time=5.0, convergence_threshold=0.001)
-    energy_history = Float64[]
-    error_history = Float64[]
-    
-    println("Training the Spring-Mass Neural Network...")
-    
-    for epoch in 1:num_epochs
-        total_error = 0.0
-        last_energy = 0.0  # Track the last energy value
-        
-        # Process each training example
-        for i in 1:size(inputs, 1)
-            # Initialize activities and velocities
-            activities = [zeros(Float64, size) for size in network.layer_sizes]
-            velocities = [zeros(Float64, size) for size in network.layer_sizes]
-            
-            # Set input
-            activities[1] = inputs[i, :]
-            
-            # Set target output
-            activities[end] = targets[i, :]
-            
-            # Let the system settle
-            for t in 0:network.dt:max_time
-                # Forward pass
-                predictions, errors = forward_pass(network, activities)
+        for i in 1:network.layer_sizes[l]
+            for j in 1:network.layer_sizes[l+1]
+                src = node_positions[(l, i)]
+                dst = node_positions[(l+1, j)]
                 
-                # Update states
-                update_state!(activities, velocities, network, predictions, errors)
+                # Calculate color and width based on weight
+                weight = network.weights[l][j, i]
+                line_color = weight > 0 ? :blue : :red
+                line_width = 1 + 3 * abs(weight) / max(0.1, maximum(abs.(network.weights[l])))
                 
-                # Update weights
-                update_weights!(network, activities, errors)
-                
-                # Calculate energy
-                current_energy = calculate_energy(network, activities, predictions, velocities)
-                last_energy = current_energy  # Store for later use
-                
-                # Stop if energy is low enough
-                if current_energy < convergence_threshold
-                    break
-                end
+                # Draw line
+                plot!(p, [src[1], dst[1]], [src[2], dst[2]], 
+                     linewidth=line_width, 
+                     color=line_color, 
+                     alpha=0.6)
             end
+        end
+    end
+    
+    # Draw nodes
+    for l in 1:network.num_layers
+        # Determine node color based on layer type
+        if l == 1
+            node_color = :orange  # Input layer
+        elseif l == network.num_layers
+            node_color = :green   # Output layer
+        else
+            node_color = :lightblue  # Hidden layers
+        end
+        
+        # Draw nodes for this layer
+        for i in 1:network.layer_sizes[l]
+            pos = node_positions[(l, i)]
             
-            # Calculate error for this example
-            predictions, errors = forward_pass(network, activities)
-            example_error = sum(errors[end].^2)
-            total_error += example_error
-        end
-        
-        # Record history
-        push!(energy_history, last_energy)  # Use the stored energy value
-        push!(error_history, total_error)
-        
-        # Print progress
-        if epoch % 10 == 0
-            println("Epoch $epoch: Error = $total_error")
-        end
-    end
-    
-    println("Training complete!")
-    return energy_history, error_history
-end
-
-"""
-    predict(network, input_data; max_time=5.0, convergence_threshold=0.001)
-
-Make a prediction for a given input.
-"""
-function predict(network, input_data; max_time=10.0, convergence_threshold=0.0005)
-    # Initialize activities and velocities
-    activities = [zeros(Float64, size) for size in network.layer_sizes]
-    velocities = [zeros(Float64, size) for size in network.layer_sizes]
-    
-    # Set input
-    activities[1] = input_data
-    
-    # Let the system settle to find the output
-    for t in 0:network.dt:max_time
-        # Forward pass
-        predictions, errors = forward_pass(network, activities)
-        
-        # Calculate forces and update all layers except input
-        for l in 2:network.num_layers
-            # Calculate force
-            force = -errors[l]
+            # Node size based on mass - larger mass = larger node
+            mass = network.masses[l][i]
+            node_size = 5 + 5 * (mass - minimum(network.masses[l])) / 
+                        max(0.1, maximum(network.masses[l]) - minimum(network.masses[l]))
             
-            # Add damping
-            force -= network.damping * velocities[l]
-            
-            # Update velocity and position
-            velocities[l] += force * network.dt
-            activities[l] += velocities[l] * network.dt
-        end
-        
-        # Check convergence
-        energy = sum(sum(errors[l].^2) for l in 2:network.num_layers)
-        if energy < convergence_threshold
-            break
+            # Draw node
+            scatter!(p, [pos[1]], [pos[2]], 
+                   markersize=node_size, 
+                   color=node_color,
+                   markerstrokewidth=1,
+                   markerstrokecolor=:black)
         end
     end
     
-    # Apply a more aggressive transformation to better separate 0s and 1s
-    # This is like adding a "snap-through" mechanism to the springs
-    outputs = activities[end]
-    
-    # First normalize to approximate range [-1, 1]
-    max_val = maximum(abs.(outputs))
-    if max_val > 0
-        outputs = outputs ./ max_val
-    end
-    
-    # Then apply a steeper sigmoid to create stronger contrast
-    scaled_outputs = 1.0 ./ (1.0 .+ exp.(-15.0 * outputs))
-    
-    # Apply thresholding for cleaner binary outputs
-    binary_outputs = map(x -> x > 0.5 ? 1.0 : 0.0, scaled_outputs)
-    
-    return binary_outputs
-end
-
-"""
-    test_xor()
-
-Test the Spring-Mass Neural Network on the XOR problem.
-"""
-function test_xor()
-    # XOR problem data
-    inputs = [0.0 0.0; 0.0 1.0; 1.0 0.0; 1.0 1.0]
-    targets = [0.0; 1.0; 1.0; 0.0]
-    
-    # Reshape targets to be a column vector for each example
-    targets = reshape(targets, (4, 1))
-    
-    # Create network with 2 inputs, 5 hidden neurons, 1 output
-    # Use physics parameters specifically tuned for XOR
-    network = SpringMassNeuralNetwork([2, 5, 1], 
-                                     damping=0.08,  # Even lower damping for more oscillation
-                                     dt=0.03,      # Larger time step for faster dynamics
-                                     learning_rate=0.25) # Higher learning rate for stronger "springs"
-    
-    # Initialize weights with larger values for more initial energy
-    for l in 1:length(network.weights)
-        network.weights[l] = 2.5 * (rand(Float64, size(network.weights[l])...) .- 0.5)
-    end
-    
-    # Train the network
-    energy_history, error_history = train!(network, inputs, targets, 
-                                          num_epochs=100, 
-                                          max_time=15.0, 
-                                          convergence_threshold=0.0001)
-    
-    # Plot training progress
-    p = plot(error_history, 
-            title="Training Error Over Time for XOR", 
-            xlabel="Epoch", 
-            ylabel="Error", 
-            grid=true, 
-            linewidth=2,
-            legend=false)
-    display(p)
-    
-    # Test the network on raw outputs (before thresholding)
-    println("\nTesting Spring-Mass Neural Network on XOR (Raw Outputs):")
-    println("--------------------------------")
-    for i in 1:size(inputs, 1)
-        # Use a custom predict function that doesn't threshold
-        prediction = predict_raw(network, inputs[i, :])
-        println("Input: $(inputs[i, :]) → Raw Output: $(round(prediction[1], digits=4)) (Expected: $(targets[i, 1]))")
-    end
-    
-    # Test the network with thresholded outputs
-    println("\nTesting Spring-Mass Neural Network on XOR (Thresholded Outputs):")
-    println("--------------------------------")
-    for i in 1:size(inputs, 1)
-        prediction = predict(network, inputs[i, :])
-        println("Input: $(inputs[i, :]) → Output: $(prediction[1]) (Expected: $(targets[i, 1]))")
-    end
-end
-
-"""
-    predict_raw(network, input_data)
-
-Make a prediction without thresholding - for visualization purposes.
-"""
-function predict_raw(network, input_data; max_time=10.0, convergence_threshold=0.0005)
-    # Initialize activities and velocities
-    activities = [zeros(Float64, size) for size in network.layer_sizes]
-    velocities = [zeros(Float64, size) for size in network.layer_sizes]
-    
-    # Set input
-    activities[1] = input_data
-    
-    # Let the system settle to find the output
-    for t in 0:network.dt:max_time
-        # Forward pass
-        predictions, errors = forward_pass(network, activities)
-        
-        # Calculate forces and update all layers except input
-        for l in 2:network.num_layers
-            # Calculate force
-            force = -errors[l]
-            
-            # Add damping
-            force -= network.damping * velocities[l]
-            
-            # Update velocity and position
-            velocities[l] += force * network.dt
-            activities[l] += velocities[l] * network.dt
+    # Add layer labels
+    for l in 1:network.num_layers
+        if l == 1
+            label = "Input"
+        elseif l == network.num_layers
+            label = "Output"
+        else
+            label = "Hidden $l"
         end
         
-        # Check convergence
-        energy = sum(sum(errors[l].^2) for l in 2:network.num_layers)
-        if energy < convergence_threshold
-            break
-        end
-    end
-    
-    # Apply sigmoid but without thresholding
-    outputs = activities[end]
-    
-    # Normalize
-    max_val = maximum(abs.(outputs))
-    if max_val > 0
-        outputs = outputs ./ max_val
-    end
-    
-    # Scale with sigmoid
-    scaled_outputs = 1.0 ./ (1.0 .+ exp.(-15.0 * outputs))
-    
-    return scaled_outputs
-end
-
-"""
-    generate_sparse_sinusoidal_dataset(num_samples, input_dim, num_components)
-
-Generate a dataset of sparse sinusoidal signals and their transformations.
-Each signal is a sum of a small number of sinusoids with random frequencies and amplitudes.
-The target output is a specific transformation of this signal.
-"""
-function generate_sparse_sinusoidal_dataset(num_samples, input_dim, num_components; seed=42)
-    Random.seed!(seed)  # For reproducibility
-    
-    # Frequency range
-    min_freq = 0.5
-    max_freq = 5.0
-    
-    # Generate dataset
-    inputs = zeros(num_samples, input_dim)
-    features = zeros(num_samples, num_components * 3)  # Store frequency, amplitude, phase for each component
-    targets = zeros(num_samples, 1)
-    
-    time_points = range(0, 1, length=input_dim)
-    
-    for i in 1:num_samples
-        # Generate random frequencies, amplitudes, and phases for each component
-        frequencies = min_freq .+ (max_freq - min_freq) * rand(num_components)
-        amplitudes = 0.3 .+ 0.7 * rand(num_components)
-        phases = 2π * rand(num_components)
-        
-        # Store the signal parameters
-        for j in 1:num_components
-            features[i, (j-1)*3+1] = frequencies[j]
-            features[i, (j-1)*3+2] = amplitudes[j]
-            features[i, (j-1)*3+3] = phases[j]
-        end
-        
-        # Generate the sparse sinusoidal signal
-        signal = zeros(input_dim)
-        for j in 1:num_components
-            signal .+= amplitudes[j] * sin.(2π * frequencies[j] * time_points .+ phases[j])
-        end
-        
-        # Normalize to range [-1, 1]
-        max_val = maximum(abs.(signal))
-        if max_val > 0
-            signal ./= max_val
-        end
-        
-        inputs[i, :] = signal
-        
-        # Target: A non-linear function of the dominant frequency and amplitude
-        # Here we use the weighted sum of frequencies, where weights are the squared amplitudes
-        target = sum(frequencies .* (amplitudes.^2)) / sum(amplitudes.^2)
-        targets[i, 1] = target
-    end
-    
-    return inputs, targets, features
-end
-
-"""
-    visualize_dataset(inputs, targets, features; num_examples=5)
-
-Visualize a few examples from the sparse sinusoidal dataset.
-"""
-function visualize_dataset(inputs, targets, features; num_examples=5)
-    num_examples = min(num_examples, size(inputs, 1))
-    n_rows = num_examples
-    
-    p = plot(layout=(n_rows, 1), size=(800, 200*n_rows), legend=false)
-    
-    for i in 1:num_examples
-        time_points = range(0, 1, length=size(inputs, 2))
-        plot!(p, time_points, inputs[i, :], subplot=i, 
-              title="Example $i: Target = $(round(targets[i, 1], digits=3))", 
-              ylabel="Amplitude", 
-              xlabel=(i == num_examples ? "Time" : ""))
+        annotate!(p, l, 0.8, text(label, 10, :black))
     end
     
     return p
 end
 
 """
-    test_spring_mass_nn_on_sinusoidal_data()
-
-Test the Spring-Mass Neural Network on a sparse sinusoidal mapping task.
+Create a test network and visualize it.
 """
-function test_spring_mass_nn_on_sinusoidal_data()
-    # Dataset parameters
-    num_samples = 100
-    input_dim = 50
-    num_components = 3
+function demo_network_creation()
+    # Create a network with 2 inputs, two hidden layers (4 and 3 neurons), and 1 output
+    network = SpringMassNeuralNetwork([2, 4, 3, 1], 
+                                     damping=0.1, 
+                                     dt=0.01, 
+                                     learning_rate=0.05,
+                                     mass_range=(0.5, 1.5),
+                                     spring_constant_range=(0.7, 1.3),
+                                     weight_range=(-1.0, 1.0),
+                                     seed=42)
     
-    # Generate dataset
-    println("Generating sparse sinusoidal dataset...")
-    inputs, targets, features = generate_sparse_sinusoidal_dataset(num_samples, input_dim, num_components)
+    # Print network information
+    print_network_info(network)
     
-    # Visualize some examples
-    p_examples = visualize_dataset(inputs, targets, features, num_examples=3)
-    display(p_examples)
+    # Visualize the network
+    p = visualize_network(network)
+    display(p)
     
-    # Split into training and testing sets
-    train_ratio = 0.8
-    num_train = Int(floor(num_samples * train_ratio))
-    
-    train_inputs = inputs[1:num_train, :]
-    train_targets = targets[1:num_train, :]
-    test_inputs = inputs[num_train+1:end, :]
-    test_targets = targets[num_train+1:end, :]
-    
-    println("Dataset created with $(num_train) training and $(num_samples - num_train) testing examples")
-    
-    # Create network with appropriate architecture for this problem
-    # Input layer: input_dim neurons
-    # Hidden layers: Two hidden layers with decreasing size
-    # Output layer: 1 neuron
-    hidden_size1 = min(100, input_dim * 2)
-    hidden_size2 = min(50, hidden_size1 ÷ 2)
-    
-    println("Creating Spring-Mass Neural Network with architecture: [$input_dim, $hidden_size1, $hidden_size2, 1]")
-    network = SpringMassNeuralNetwork([input_dim, hidden_size1, hidden_size2, 1], 
-                                      damping=0.3, dt=0.005, learning_rate=0.01)
-    
-    # Train the network
-    num_epochs = 50
-    println("Training the network for $num_epochs epochs...")
-    energy_history, error_history = train!(network, train_inputs, train_targets, 
-                                          num_epochs=num_epochs, max_time=3.0)
-    
-    # Plot training progress
-    p_training = plot(error_history, 
-                    title="Training Error Over Time", 
-                    xlabel="Epoch", 
-                    ylabel="Error", 
-                    grid=true, 
-                    linewidth=2,
-                    legend=false)
-    display(p_training)
-    
-    # Evaluate on test set
-    println("\nEvaluating on test set...")
-    test_predictions = zeros(size(test_targets))
-    for i in 1:size(test_inputs, 1)
-        test_predictions[i, :] = predict(network, test_inputs[i, :])
-    end
-    
-    # Calculate MSE
-    test_mse = mean((test_predictions .- test_targets).^2)
-    println("Test MSE: $test_mse")
-    
-    # Visualize predictions vs targets
-    p_results = scatter(test_targets, test_predictions, 
-                      xlabel="True Values", 
-                      ylabel="Predicted Values", 
-                      title="Spring-Mass NN Predictions on Sinusoidal Mapping", 
-                      legend=false)
-    
-    # Add diagonal line representing perfect predictions
-    min_val = min(minimum(test_targets), minimum(test_predictions))
-    max_val = max(maximum(test_targets), maximum(test_predictions))
-    range_vals = range(min_val, max_val, length=100)
-    plot!(p_results, range_vals, range_vals, linestyle=:dash, color=:red)
-    
-    display(p_results)
-    
-    # Visualize a few examples with their predictions
-    println("\nVisualizing examples with predictions...")
-    num_viz = 3
-    p_viz = plot(layout=(num_viz, 1), size=(800, 200*num_viz))
-    
-    for i in 1:num_viz
-        idx = i
-        time_points = range(0, 1, length=size(test_inputs, 2))
-        plot!(p_viz, time_points, test_inputs[idx, :], subplot=i, 
-              title="Example $i: True = $(round(test_targets[idx, 1], digits=3)), Predicted = $(round(test_predictions[idx, 1], digits=3))", 
-              ylabel="Amplitude", 
-              xlabel=(i == num_viz ? "Time" : ""))
-    end
-    
-    display(p_viz)
-    
-    return network, p_results
+    return network
 end
 
-# Main function to run all tests
-function main()
-    println("=== Testing Spring-Mass Neural Network on XOR Problem ===")
-    test_xor()
-    
-    println("\n\n=== Testing Spring-Mass Neural Network on Sinusoidal Mapping ===")
-    test_spring_mass_nn_on_sinusoidal_data()
+# Run the demo if this script is executed directly
+if abspath(PROGRAM_FILE) == @__FILE__
+    demo_network_creation()
 end
 
-# Run the main function
-main()
+# Create a network with 2 inputs, 4 neurons in first hidden layer, 
+# 3 neurons in second hidden layer, and 1 output
+network = SpringMassNeuralNetwork([2, 4, 3, 1], 
+                                 damping=0.1, 
+                                 dt=0.01, 
+                                 learning_rate=0.05)
+
+# Print details and visualize
+print_network_info(network)
+visualize_network(network)
