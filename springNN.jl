@@ -119,59 +119,53 @@ function static_network_plot(layer_sizes::Vector{Int})
         end
     end
 
-    # 2) Build arrow‐pairs between ℓ→ℓ+1
+    # 2) Build arrow‐pairs between ℓ → ℓ+1
     arrow_pairs = Tuple{Point2f0,Point2f0}[]
     for ℓ in 1:n_layers-1
-        start1, start2 = layer_starts[ℓ], layer_starts[ℓ+1]
+        s1, s2 = layer_starts[ℓ], layer_starts[ℓ+1]
         for i in 0:layer_sizes[ℓ]-1, j in 0:layer_sizes[ℓ+1]-1
-            push!(arrow_pairs,
-                (positions[start1 + i], positions[start2 + j]))
+            push!(arrow_pairs, (positions[s1+i], positions[s2+j]))
         end
     end
 
-    # 3) Make figure & bare axis
-    fig = Figure(resolution = (600, 200))
-    ax  = Axis(fig[1, 1])
+    # 3) Make figure & strip decorations
+    fig = Figure(resolution=(600,400))
+    ax  = Axis(fig[1,1])
+    hidedecorations!(ax)  # hides ticks, tick labels, grid
+    hidespines!(ax)       # hides the axis frame
 
-    # 4) Hide literally everything
-    hideticks!(ax)        # ticks + tick labels
-    hidespines!(ax)        # the four spines
-    ax.xgridvisible = false  # remove gridlines
-    ax.ygridvisible = false
-
-    # 5) Draw grey arrows
-    for (p1, p2) in arrow_pairs
+    # 4) Draw grey arrows (with default arrowheads)
+    for (p1,p2) in arrow_pairs
         arrows!(ax, [p1], [p2];
-            arrowhead  = Arrowhead(0.12, π/8),
-            linewidth  = 1,
-            color      = :gray,
+            color     = :gray,
+            linewidth = 1,
         )
     end
 
-    # 6) Draw nodes + labels
+    # 5) Draw nodes & labels
     for ℓ in 1:n_layers
-        col = ℓ == 1             ? :blue        :  # input
-              ℓ == n_layers      ? :red         :  # output
-                                     :forestgreen   # hidden
+        col = ℓ == 1           ? :blue       :  # input
+              ℓ == n_layers    ? :red        :  # output
+                                 :forestgreen   # hidden
         start = layer_starts[ℓ]
         for k in 0:layer_sizes[ℓ]-1
-            p = positions[start + k]
+            idx = start + k
+            p   = positions[idx]
             scatter!(ax, [p];
                 color      = col,
                 markersize = 30,
                 strokewidth = 0,
             )
-            text!(ax, string(start + k);
-                position   = p,
-                align      = (:center, :center),
-                color      = :white,
-                fontsize   = 16,
-                fontweight = "bold",
+            text!(ax, string(idx);
+                position = p,
+                align    = (:center, :center),
+                color    = :white,
+                fontsize = 16,
             )
         end
     end
 
-    fig
+    return fig
 end
 
 # -------------------------------------------------------------------
