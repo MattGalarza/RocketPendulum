@@ -4,7 +4,7 @@ using CairoMakie
 using GLMakie
 using GeometryBasics: Point2f0, Point3f0, Sphere
 
-# -------------------------------------------------------------------
+# ------------------------- Build spring network -------------------------
 function build_network(layer_sizes::Vector{Int})
     N = sum(layer_sizes)
     layers = Int[]
@@ -24,8 +24,7 @@ function build_network(layer_sizes::Vector{Int})
     return N, layers, neighbors
 end
 
-# -------------------------------------------------------------------
-# 2) The ODE system: u = [ x₁…x_N, v₁…v_N ]
+# ------------------------- Build network ODE -------------------------
 function spring_mass_ode!(du, u, p, t)
     N = length(p.m)
     x = @view u[1:N]
@@ -43,18 +42,19 @@ function spring_mass_ode!(du, u, p, t)
     end
 end
 
-# -------------------------------------------------------------------
-# 3) Compute local + total energies from the solution
+# ------------------------- Compute local and total energies -------------------------
 function compute_energies(sol::ODESolution, p)
-    N     = length(p.m)
-    M     = Array(sol)         # (2N)×ntime
-    xs    = M[1:N,   :]
-    vs    = M[N+1:2N, :]
+    N = length(p.m)
+    M = Array(sol)       
+    xs = M[1:N,:]
+    vs = M[N+1:2N,:]
     ntime = length(sol.t)
 
-    Ekin  = 0.5 .* p.m    .* (vs .^ 2)
+    # Local node energies (kinetic and sink)
+    Ekin  = 0.5 .* p.m .* (vs .^ 2)
     Esink = 0.5 .* p.k_sink .* (xs .^ 2)
 
+    # Local coupling energies
     Ecpl = zeros(N, ntime)
     @inbounds for i in 1:N, ti in 1:ntime
         for j in p.neighbors[i]
@@ -67,8 +67,8 @@ function compute_energies(sol::ODESolution, p)
     return Elocal, Etotal
 end
 
-# -------------------------------------------------------------------
-# 4A) Static plot: all node energies + total
+# ------------------------- Plotting + Visualization -------------------------
+# Static plot (all nodes)
 function plot_all_nodes(ts, Elocal, Etotal)
     fig = Figure(size=(800,400))
     ax  = Axis(fig[1,1], xlabel="t", ylabel="Energy", title="All Node Energies")
@@ -80,8 +80,7 @@ function plot_all_nodes(ts, Elocal, Etotal)
     return fig
 end
 
-# -------------------------------------------------------------------
-# 4B) Static plot: input‐layer vs output‐layer
+# Static plot (input/output nodes)
 function plot_io_nodes(ts, Elocal, layers; layers_idx=(1, maximum(layers)))
     fig = Figure(size=(800,300))
     ax1 = Axis(fig[1,1], xlabel="t", ylabel="Energy", title="Input Layer Energies")
@@ -99,71 +98,67 @@ function plot_io_nodes(ts, Elocal, layers; layers_idx=(1, maximum(layers)))
     return fig
 end
 
-# -------------------------------------------------------------------
+# Network Schemcatic
 function static_network_plot(layer_sizes::Vector{Int})
     n_layers = length(layer_sizes)
 
-    # ————————————————————————————————————————————
-    # 1) normalize x‐positions to [0,1]
-    xs = range(0f0, 1f0, length=n_layers)
+    # 1) normalized x positions in [0,1]
+    xs = range(0f0, 1f0; length=n_layers)
 
-    # 2) compute each node’s (x,y) in [0,1]×[0,1]
-    positions    = Point2f0[]
+    # 2) build 2D positions in [0,1]×[0,1]
+    positions = Point2f0[]
     layer_starts = Int[]
     idx = 1
-    for (i,n) in enumerate(layer_sizes)
+    for (l,n) in enumerate(layer_sizes)
         push!(layer_starts, idx)
-        ys = n == 1 ? [0.5f0] :
-             n == 2 ? [0.3f0, 0.7f0] :
-                      range(0.1f0, 0.9f0; length=n)
+        ys = n == 1   ? [0.5f0] :
+             n == 2   ? [0.3f0,0.7f0] :
+                        range(0.1f0, 0.9f0; length=n)
         for y in ys
-            push!(positions, Point2f0(xs[i], y))
+            push!(positions, Point2f0(xs[l], y))
             idx += 1
         end
     end
 
-    # ————————————————————————————————————————————
-    # 3) build all the arrows from layer ℓ → ℓ+1
-    arrow_pairs = Tuple{Point2f0,Point2f0}[]
-    for ℓ in 1:n_layers-1
-        s1, s2 = layer_starts[ℓ], layer_starts[ℓ+1]
-        for i in 0:layer_sizes[ℓ]-1, j in 0:layer_sizes[ℓ+1]-1
-            push!(arrow_pairs,
-                (positions[s1 + i], positions[s2 + j]))
+    # 3) prepare all inter-layer pairs
+    pairs = Tuple{Point2f0,Point2f0}[]
+    for l in 1:n_layers-1
+        s1, s2 = layer_starts[l], layer_starts[l+1]
+        for i in 0:layer_sizes[l]-1, j in 0:layer_sizes[l+1]-1
+            p1 = positions[s1 + i]
+            p2 = positions[s2 + j]
+            push!(pairs, (p1, p2))
         end
     end
 
-    # ————————————————————————————————————————————
-    # 4) assemble the CairoMakie figure
-    fig = Figure(resolution=(600,200))
-    ax  = Axis(fig[1,1],
-        xticks = [], yticks = [],
-        xgridvisible = false, ygridvisible = false)
-    # hide all four spines:
-    ax.leftspinevisible   = false
-    ax.rightspinevisible  = false
-    ax.topspinevisible    = false
-    ax.bottomspinevisible = false
-    limits!(ax, -0.05, 1.05, -0.05, 1.05)  # give a little margin for the arrowheads
+    # 4) make figure & blank axis
+    fig = Figure(resolution=(800,300))
+    ax  = Axis(fig[1,1];
+        xgridvisible=false,
+        ygridvisible=false,
+        xticksvisible=false,
+        yticksvisible=false,
+        xticklabelsvisible=false,
+        yticklabelsvisible=false,
+        leftspinevisible=false,
+        rightspinevisible=false,
+        topspinevisible=false,
+        bottomspinevisible=false
+    )
+    limits!(ax, -0.05, 1.05, -0.05, 1.05)
 
-    # ————————————————————————————————————————————
-    # 5) draw every arrow with a nice head
-    for (p1,p2) in arrow_pairs
-        arrows!(ax, [p1], [p2];
-            arrowhead  = Arrowhead(8, π/8),
-            linewidth  = 1.2,
-            color      = :gray,
-        )
+    # 5) draw light-gray lines
+    for (p1, p2) in pairs
+        lines!(ax, [p1, p2]; color=:gray, linewidth=1.2)
     end
 
-    # ————————————————————————————————————————————
-    # 6) draw nodes + labels
-    for ℓ in 1:n_layers
-        col = ℓ == 1          ? :blue        :  # input
-              ℓ == n_layers   ? :red         :  # output
+    # 6) draw colored nodes + labels
+    for l in 1:n_layers
+        col = l==1           ? :blue        :  # input
+              l==n_layers    ? :red         :  # output
                                  :forestgreen  # hidden
-        start = layer_starts[ℓ]
-        for k in 0:layer_sizes[ℓ]-1
+        start = layer_starts[l]
+        for k in 0:layer_sizes[l]-1
             i = start + k
             p = positions[i]
             scatter!(ax, [p];
