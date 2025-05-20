@@ -1,7 +1,6 @@
 using DifferentialEquations, OrdinaryDiffEq
 using LinearAlgebra, StaticArrays, Statistics
-using CairoMakie, GLMakie, MakieCore, GeometryBasics, Observables 
-using Makie: translate
+using CairoMakie, GLMakie, MakieCore, GeometryBasics, Colors, Observables 
 
 # ------------------------- Build spring network -------------------------
 function build_network(layer_sizes::Vector{Int})
@@ -98,6 +97,77 @@ function plot_io_nodes(ts, Elocal, layers; layers_idx=(1, maximum(layers)))
 end
 
 # Network Schemcatic
+function static_network_plot(layer_sizes::Vector{Int})
+    n_layers = length(layer_sizes)
+    xs = range(0f0, 1f0; length=n_layers)
+    positions = Point2f0[]
+    layer_starts = Int[]
+    idx = 1
+    for (l,n) in enumerate(layer_sizes)
+        push!(layer_starts, idx)
+        ys = n == 1 ? [0.5f0] : n == 2 ? [0.3f0,0.7f0] : range(0.1f0, 0.9f0; length=n)
+        for y in ys
+            push!(positions, Point2f0(xs[l], y))
+            idx += 1
+        end
+    end
+
+    # prepare the layers
+    pairs = Tuple{Point2f0,Point2f0}[]
+    for l in 1:n_layers-1
+        s1, s2 = layer_starts[l], layer_starts[l+1]
+        for i in 0:layer_sizes[l]-1, j in 0:layer_sizes[l+1]-1
+            p1 = positions[s1 + i]
+            p2 = positions[s2 + j]
+            push!(pairs, (p1, p2))
+        end
+    end
+
+    # Remove figure axes and grid
+    fig = Figure(size=(800,300))
+    ax  = Axis(fig[1,1];
+        xgridvisible=false,
+        ygridvisible=false,
+        xticksvisible=false,
+        yticksvisible=false,
+        xticklabelsvisible=false,
+        yticklabelsvisible=false,
+        leftspinevisible=false,
+        rightspinevisible=false,
+        topspinevisible=false,
+        bottomspinevisible=false
+    )
+    limits!(ax, -0.05, 1.05, -0.05, 1.05)
+
+    # Connect nodes with lines
+    for (p1, p2) in pairs
+        lines!(ax, [p1, p2]; color=:gray, linewidth=1.2)
+    end
+
+    # Include nodes and labels
+    for l in 1:n_layers
+        col = l==1 ? :blue : l==n_layers ? :red : :forestgreen
+        start = layer_starts[l]
+        for k in 0:layer_sizes[l]-1
+            i = start + k
+            p = positions[i]
+            scatter!(ax, [p];
+                color = col,
+                markersize = 28,
+                strokewidth = 0,
+            )
+            text!(ax, string(i);
+                position = p,
+                align = (:center, :center),
+                color = :white,
+                fontsize = 16,
+            )
+        end
+    end
+    return fig
+end
+
+# Visualization of energy network
 function animate_network3d(sol, p, layer_sizes::Vector{Int})
     N, layers, neighbors = build_network(layer_sizes)
     xs = Float32.(range(0f0, 2f0*(length(layer_sizes)-1), length=length(layer_sizes)))
@@ -148,7 +218,7 @@ function animate_network3d(sol, p, layer_sizes::Vector{Int})
     x_mid = sum(p[1] for p in base_positions)/N
     y_mid = sum(p[2] for p in base_positions)/N
     cam3d!(scene,
-        lookat      = Point3f0(x_mid, y_mid, 0f0),
+        lookat = Point3f0(x_mid, y_mid, 0f0),
         eyeposition = Point3f0(-6, -6, 4)
     )
 
@@ -196,8 +266,8 @@ function main()
     display(fig1)   
     fig2 = plot_io_nodes(ts, Elocal, layers; layers_idx=(1,length(layer_sizes)))
     display(fig2)  
-    #fig3 = static_network_plot(layer_sizes)
-    #display(fig3)  
+    fig3 = static_network_plot(layer_sizes)
+    display(fig3)  
 
     GLMakie.activate!()
     scene = animate_network3d(sol, p, layer_sizes)
