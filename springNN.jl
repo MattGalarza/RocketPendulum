@@ -223,10 +223,11 @@ function animate_network3d(sol, p, layer_sizes::Vector{Int})
     )
 
     # Animation loop
+    scale = 2
     @async for frame in 1:nframes
         new_pos = Point3f0[]
         for i in 1:N
-            z = Emax==0f0 ? 0f0 : Float32( Elocal[i,frame] / Emax )
+            z = Emax==0f0 ? 0f0 : scale * Float32( Elocal[i,frame] / Emax )
             bp = base_positions[i]
             push!(new_pos, Point3f0(bp[1], bp[2], z))
         end
