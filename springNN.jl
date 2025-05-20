@@ -82,7 +82,7 @@ end
 
 # Static plot (input/output nodes)
 function plot_io_nodes(ts, Elocal, layers; layers_idx=(1, maximum(layers)))
-    fig = Figure(size=(800,300))
+    fig = Figure(size=(800,400))
     ax1 = Axis(fig[1,1], xlabel="t", ylabel="Energy", title="Input Layer Energies")
     ax2 = Axis(fig[2,1], xlabel="t", ylabel="Energy", title="Output Layer Energies")
     inputs  = findall(x->x==layers_idx[1], layers)
@@ -101,26 +101,20 @@ end
 # Network Schemcatic
 function static_network_plot(layer_sizes::Vector{Int})
     n_layers = length(layer_sizes)
-
-    # 1) normalized x positions in [0,1]
     xs = range(0f0, 1f0; length=n_layers)
-
-    # 2) build 2D positions in [0,1]×[0,1]
     positions = Point2f0[]
     layer_starts = Int[]
     idx = 1
     for (l,n) in enumerate(layer_sizes)
         push!(layer_starts, idx)
-        ys = n == 1   ? [0.5f0] :
-             n == 2   ? [0.3f0,0.7f0] :
-                        range(0.1f0, 0.9f0; length=n)
+        ys = n == 1 ? [0.5f0] : n == 2 ? [0.3f0,0.7f0] : range(0.1f0, 0.9f0; length=n)
         for y in ys
             push!(positions, Point2f0(xs[l], y))
             idx += 1
         end
     end
 
-    # 3) prepare all inter-layer pairs
+    # prepare the layers
     pairs = Tuple{Point2f0,Point2f0}[]
     for l in 1:n_layers-1
         s1, s2 = layer_starts[l], layer_starts[l+1]
@@ -131,8 +125,8 @@ function static_network_plot(layer_sizes::Vector{Int})
         end
     end
 
-    # 4) make figure & blank axis
-    fig = Figure(resolution=(800,300))
+    # Remove figure axes and grid
+    fig = Figure(size=(800,300))
     ax  = Axis(fig[1,1];
         xgridvisible=false,
         ygridvisible=false,
@@ -147,34 +141,31 @@ function static_network_plot(layer_sizes::Vector{Int})
     )
     limits!(ax, -0.05, 1.05, -0.05, 1.05)
 
-    # 5) draw light-gray lines
+    # Connect nodes with lines
     for (p1, p2) in pairs
         lines!(ax, [p1, p2]; color=:gray, linewidth=1.2)
     end
 
-    # 6) draw colored nodes + labels
+    # Include nodes and labels
     for l in 1:n_layers
-        col = l==1           ? :blue        :  # input
-              l==n_layers    ? :red         :  # output
-                                 :forestgreen  # hidden
+        col = l==1 ? :blue : l==n_layers ? :red : :forestgreen
         start = layer_starts[l]
         for k in 0:layer_sizes[l]-1
             i = start + k
             p = positions[i]
             scatter!(ax, [p];
-                color      = col,
+                color = col,
                 markersize = 28,
                 strokewidth = 0,
             )
             text!(ax, string(i);
                 position = p,
-                align    = (:center, :center),
-                color    = :white,
+                align = (:center, :center),
+                color = :white,
                 fontsize = 16,
             )
         end
     end
-
     return fig
 end
 
@@ -219,10 +210,10 @@ function main()
     layer_sizes = [2,4,4,1]
     N, layers, neighbors = build_network(layer_sizes)
 
-    m      = 1.0 .* ones(N)
+    m = 1.0 .* ones(N)
     k_sink = 1.0 .* ones(N)
-    c      = 0.0 .* ones(N)
-    k_cpl  = 1.0
+    c = 0.0 .* ones(N)
+    k_cpl = 1.0
 
     p = (m=m, k_sink=k_sink, k_cpl=k_cpl, c=c, neighbors=neighbors)
 
@@ -231,7 +222,7 @@ function main()
     u0 = vcat(x0, v0)
 
     prob = ODEProblem(spring_mass_ode!, u0, (0.0, 50.0), p)
-    sol  = solve(prob, Tsit5(), dt=0.01, saveat=0.01)
+    sol = solve(prob, Tsit5(), dt=0.01, saveat=0.01)
 
     Elocal, Etotal = compute_energies(sol, p)
     ts = sol.t
