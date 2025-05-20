@@ -5,7 +5,6 @@ using GLMakie
 using GeometryBasics: Point2f0, Point3f0, Sphere
 
 # -------------------------------------------------------------------
-# 1) Build arbitrary full‐bipartite inter‐layer neighbor list
 function build_network(layer_sizes::Vector{Int})
     N = sum(layer_sizes)
     layers = Int[]
@@ -104,59 +103,75 @@ end
 function static_network_plot(layer_sizes::Vector{Int})
     n_layers = length(layer_sizes)
 
-    # 1) Compute node positions
+    # ————————————————————————————————————————————
+    # 1) normalize x‐positions to [0,1]
+    xs = range(0f0, 1f0, length=n_layers)
+
+    # 2) compute each node’s (x,y) in [0,1]×[0,1]
     positions    = Point2f0[]
     layer_starts = Int[]
     idx = 1
-    for (ℓ,n) in enumerate(layer_sizes)
+    for (i,n) in enumerate(layer_sizes)
         push!(layer_starts, idx)
-        ys = n == 1  ? [0.0] :
-             n == 2  ? [-0.5, 0.5] :
-                       range(-1, 1; length=n)
+        ys = n == 1 ? [0.5f0] :
+             n == 2 ? [0.3f0, 0.7f0] :
+                      range(0.1f0, 0.9f0; length=n)
         for y in ys
-            push!(positions, Point2f0(ℓ*2, y))
+            push!(positions, Point2f0(xs[i], y))
             idx += 1
         end
     end
 
-    # 2) Build arrow‐pairs between ℓ → ℓ+1
+    # ————————————————————————————————————————————
+    # 3) build all the arrows from layer ℓ → ℓ+1
     arrow_pairs = Tuple{Point2f0,Point2f0}[]
     for ℓ in 1:n_layers-1
         s1, s2 = layer_starts[ℓ], layer_starts[ℓ+1]
         for i in 0:layer_sizes[ℓ]-1, j in 0:layer_sizes[ℓ+1]-1
-            push!(arrow_pairs, (positions[s1+i], positions[s2+j]))
+            push!(arrow_pairs,
+                (positions[s1 + i], positions[s2 + j]))
         end
     end
 
-    # 3) Make figure & strip decorations
-    fig = Figure(resolution=(600,400))
-    ax  = Axis(fig[1,1])
-    hidedecorations!(ax)  # hides ticks, tick labels, grid
-    hidespines!(ax)       # hides the axis frame
+    # ————————————————————————————————————————————
+    # 4) assemble the CairoMakie figure
+    fig = Figure(resolution=(600,200))
+    ax  = Axis(fig[1,1],
+        xticks = [], yticks = [],
+        xgridvisible = false, ygridvisible = false)
+    # hide all four spines:
+    ax.leftspinevisible   = false
+    ax.rightspinevisible  = false
+    ax.topspinevisible    = false
+    ax.bottomspinevisible = false
+    limits!(ax, -0.05, 1.05, -0.05, 1.05)  # give a little margin for the arrowheads
 
-    # 4) Draw grey arrows (with default arrowheads)
+    # ————————————————————————————————————————————
+    # 5) draw every arrow with a nice head
     for (p1,p2) in arrow_pairs
         arrows!(ax, [p1], [p2];
-            color     = :gray,
-            linewidth = 1,
+            arrowhead  = Arrowhead(8, π/8),
+            linewidth  = 1.2,
+            color      = :gray,
         )
     end
 
-    # 5) Draw nodes & labels
+    # ————————————————————————————————————————————
+    # 6) draw nodes + labels
     for ℓ in 1:n_layers
-        col = ℓ == 1           ? :blue       :  # input
-              ℓ == n_layers    ? :red        :  # output
-                                 :forestgreen   # hidden
+        col = ℓ == 1          ? :blue        :  # input
+              ℓ == n_layers   ? :red         :  # output
+                                 :forestgreen  # hidden
         start = layer_starts[ℓ]
         for k in 0:layer_sizes[ℓ]-1
-            idx = start + k
-            p   = positions[idx]
+            i = start + k
+            p = positions[i]
             scatter!(ax, [p];
                 color      = col,
-                markersize = 30,
+                markersize = 28,
                 strokewidth = 0,
             )
-            text!(ax, string(idx);
+            text!(ax, string(i);
                 position = p,
                 align    = (:center, :center),
                 color    = :white,
