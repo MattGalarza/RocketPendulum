@@ -1,8 +1,7 @@
-using DifferentialEquations
-using LinearAlgebra
-using CairoMakie
-using GLMakie
-using GeometryBasics: Point2f0, Point3f0, Sphere
+using DifferentialEquations, OrdinaryDiffEq
+using LinearAlgebra, StaticArrays, Statistics
+using CairoMakie, GLMakie, MakieCore, GeometryBasics, Observables 
+using Makie: translate
 
 # ------------------------- Build spring network -------------------------
 function build_network(layer_sizes::Vector{Int})
@@ -99,112 +98,77 @@ function plot_io_nodes(ts, Elocal, layers; layers_idx=(1, maximum(layers)))
 end
 
 # Network Schemcatic
-function static_network_plot(layer_sizes::Vector{Int})
-    n_layers = length(layer_sizes)
-    xs = range(0f0, 1f0; length=n_layers)
-    positions = Point2f0[]
-    layer_starts = Int[]
-    idx = 1
-    for (l,n) in enumerate(layer_sizes)
-        push!(layer_starts, idx)
-        ys = n == 1 ? [0.5f0] : n == 2 ? [0.3f0,0.7f0] : range(0.1f0, 0.9f0; length=n)
-        for y in ys
-            push!(positions, Point2f0(xs[l], y))
-            idx += 1
-        end
-    end
-
-    # prepare the layers
-    pairs = Tuple{Point2f0,Point2f0}[]
-    for l in 1:n_layers-1
-        s1, s2 = layer_starts[l], layer_starts[l+1]
-        for i in 0:layer_sizes[l]-1, j in 0:layer_sizes[l+1]-1
-            p1 = positions[s1 + i]
-            p2 = positions[s2 + j]
-            push!(pairs, (p1, p2))
-        end
-    end
-
-    # Remove figure axes and grid
-    fig = Figure(size=(800,300))
-    ax  = Axis(fig[1,1];
-        xgridvisible=false,
-        ygridvisible=false,
-        xticksvisible=false,
-        yticksvisible=false,
-        xticklabelsvisible=false,
-        yticklabelsvisible=false,
-        leftspinevisible=false,
-        rightspinevisible=false,
-        topspinevisible=false,
-        bottomspinevisible=false
-    )
-    limits!(ax, -0.05, 1.05, -0.05, 1.05)
-
-    # Connect nodes with lines
-    for (p1, p2) in pairs
-        lines!(ax, [p1, p2]; color=:gray, linewidth=1.2)
-    end
-
-    # Include nodes and labels
-    for l in 1:n_layers
-        col = l==1 ? :blue : l==n_layers ? :red : :forestgreen
-        start = layer_starts[l]
-        for k in 0:layer_sizes[l]-1
-            i = start + k
-            p = positions[i]
-            scatter!(ax, [p];
-                color = col,
-                markersize = 28,
-                strokewidth = 0,
-            )
-            text!(ax, string(i);
-                position = p,
-                align = (:center, :center),
-                color = :white,
-                fontsize = 16,
-            )
-        end
-    end
-    return fig
-end
-
-# -------------------------------------------------------------------
-# 5) GLMakie animation: spheres bob by local energy
-function animate_network(sol::ODESolution, p, layer_sizes::Vector{Int})
-    scene = Scene(size=(600,400), camera=campixel!)
+function animate_network3d(sol, p, layer_sizes::Vector{Int})
     N, layers, neighbors = build_network(layer_sizes)
-
-    positions = Vector{Point3f0}(undef, N)
-    idx = 1
+    xs = Float32.(range(0f0, 2f0*(length(layer_sizes)-1), length=length(layer_sizes)))
+    base_positions = Point3f0[]
     for (l,n) in enumerate(layer_sizes)
-        ys = n==1 ? [0.0] : range(0.0, -1.0, length=n)
-        for i in 1:n
-            positions[idx] = Point3f0(l, ys[i], 0.0)
-            idx += 1
+        ys = n==1 ? [0f0] : Float32.(range(-1.5,1.5,length=n))
+        for y in ys
+            push!(base_positions, Point3f0(xs[l], y, 0f0))
         end
     end
 
-    spheres = [ mesh!(scene, Sphere(positions[i],0.08f0), color=:blue)
-                for i in 1:N ]
-
-    Elocal, _ = compute_energies(sol, p)
-    ts = sol.t
-    Emax = maximum(Elocal)
-
-    @async for frame in 1:length(ts)
-        for i in 1:N
-            z = 0.2f0 * (Elocal[i,frame]/Emax)
-            spheres[i].transformation.translation =
-              Point3f0(positions[i][1], positions[i][2], z)
+    conns = Tuple{Int,Int}[]
+    for i in 1:N, j in neighbors[i]
+        i<j && push!(conns,(i,j))
+    end
+    make_segments(pts) = begin
+        seg = Point3f0[]
+        for (i,j) in conns
+            push!(seg, pts[i], pts[j])
         end
+        seg
+    end
+
+    # Compute energies
+    Elocal, _ = compute_energies(sol, p)
+    Emax = maximum(Elocal)
+    nframes = length(sol.t)
+
+    # Node colors
+    node_colors = [layer==1 ? :royalblue :
+                    layer==maximum(layers) ? :firebrick : :forestgreen
+                    for layer in layers
+    ]
+
+    # Build scene
+    scene = Scene(size=(800,600), backgroundcolor=:white)
+    positionsObs = Observable(copy(base_positions))
+    meshscatter!(
+        scene, positionsObs;
+        markersize = 0.3f0,
+        color = node_colors,
+        #shading = true,
+        transparency = false
+    )
+    segObs = Observable(make_segments(base_positions))
+    lines!(scene, segObs; color=:gray, linewidth=1)
+
+    x_mid = sum(p[1] for p in base_positions)/N
+    y_mid = sum(p[2] for p in base_positions)/N
+    cam3d!(scene,
+        lookat      = Point3f0(x_mid, y_mid, 0f0),
+        eyeposition = Point3f0(-6, -6, 4)
+    )
+
+    # Animation loop
+    @async for frame in 1:nframes
+        new_pos = Point3f0[]
+        for i in 1:N
+            z = Emax==0f0 ? 0f0 : Float32( Elocal[i,frame] / Emax )
+            bp = base_positions[i]
+            push!(new_pos, Point3f0(bp[1], bp[2], z))
+        end
+        # update points and springs
+        positionsObs[] = new_pos
+        segObs[] = make_segments(new_pos)
         sleep(1/60)
     end
-
     return scene
 end
 
-# -------------------------------------------------------------------
+# ------------------------- Generate network + solve ODE -------------------------
 # Main: ties everything together
 function main()
     layer_sizes = [2,4,4,1]
@@ -221,7 +185,7 @@ function main()
     v0 = 2rand(N).-1
     u0 = vcat(x0, v0)
 
-    prob = ODEProblem(spring_mass_ode!, u0, (0.0, 50.0), p)
+    prob = ODEProblem(spring_mass_ode!, u0, (0.0, 10.0), p)
     sol = solve(prob, Tsit5(), dt=0.01, saveat=0.01)
 
     Elocal, Etotal = compute_energies(sol, p)
@@ -232,12 +196,12 @@ function main()
     display(fig1)   
     fig2 = plot_io_nodes(ts, Elocal, layers; layers_idx=(1,length(layer_sizes)))
     display(fig2)  
-    fig3 = static_network_plot(layer_sizes)
-    display(fig3)  
+    #fig3 = static_network_plot(layer_sizes)
+    #display(fig3)  
 
     GLMakie.activate!()
-    scene = animate_network(sol, p, layer_sizes)
-    display(scene) 
+    scene = animate_network3d(sol, p, layer_sizes)
+    display(scene)
 end
 
 if abspath(PROGRAM_FILE) == @__FILE__
