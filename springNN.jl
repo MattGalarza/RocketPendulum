@@ -168,7 +168,73 @@ function static_network_plot(layer_sizes::Vector{Int})
 end
 
 # Visualization of energy network
-function animate_network3d(sol, p, layer_sizes::Vector{Int})
+function animate_network3d(sol, p, layer_sizes::Vector{Int};
+                           x_spacing    = 3.0f0,
+                           y_spacing    = 1f0,
+                           energy_scale = 2)
+
+    N, layers, neighbors = build_network(layer_sizes)
+    base_pos = Point3f0[]
+    for (l,n) in enumerate(layer_sizes)
+        xs = (l-1)*x_spacing
+        ys = [(i - (n+1)/2)*y_spacing for i in 1:n]
+        for y in ys
+            push!(base_pos, Point3f0(xs, y, 0f0))
+        end
+    end
+
+    conns = [(i,j) for i in 1:N for j in neighbors[i] if i<j]
+    # compute energies
+    Elocal, _ = compute_energies(sol, p)
+    Emax = maximum(Elocal)
+
+    # layer color
+    node_colors = [l==1 ? :royalblue :
+                   l==maximum(layers) ? :firebrick : :forestgreen
+                   for l in layers
+    ]
+    base_gap = min(x_spacing, y_spacing)
+    sphere_size = 0.3f0 * base_gap
+    posObs = Observable(copy(base_pos))
+    segObs = Observable(Point3f0[])
+    function update_segments!(pts)
+        seg = Point3f0[]
+        for (i,j) in conns
+            push!(seg, pts[i], pts[j])
+        end
+        segObs[] = seg
+    end
+    update_segments!(base_pos)
+
+    # build scene
+    scene = Scene(resolution=(800,600), backgroundcolor=:white)
+    meshscatter!(scene, posObs;
+                 color = node_colors,
+                 markersize = sphere_size)
+    lines!(scene, segObs;
+           color = :gray,
+           linewidth = 1.5)
+    xm = mean(getindex.(base_pos,1))
+    cam3d!(scene;
+           eyeposition = Point3f0(xm, -xm, xm*0.6),
+           lookat = Point3f0(xm, 0f0, 0f0),
+           up = Vec3f0(0,0,1))
+
+    # Animation loop
+    @async for f in 1:length(sol.t)
+        pts = Point3f0[]
+        for i in 1:N
+            z = Emax>0 ? energy_scale * Float32(Elocal[i,f]/Emax) : 0f0
+            bp = base_pos[i]
+            push!(pts, Point3f0(bp[1], bp[2], z))
+        end
+        posObs[] = pts
+        update_segments!(pts)
+        sleep(1/30)
+    end
+    return scene
+end
+function animate_network3d2(sol, p, layer_sizes::Vector{Int})
     N, layers, neighbors = build_network(layer_sizes)
     xs = Float32.(range(0f0, 2f0*(length(layer_sizes)-1), length=length(layer_sizes)))
     base_positions = Point3f0[]
@@ -240,9 +306,8 @@ function animate_network3d(sol, p, layer_sizes::Vector{Int})
 end
 
 # ------------------------- Generate network + solve ODE -------------------------
-# Main: ties everything together
 function main()
-    layer_sizes = [2,4,4,1]
+    layer_sizes = [2,8,4,2]
     N, layers, neighbors = build_network(layer_sizes)
 
     m = 1.0 .* ones(N)
