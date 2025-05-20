@@ -1,5 +1,6 @@
 using DifferentialEquations
 using LinearAlgebra
+using CairoMakie
 using GLMakie
 using GeometryBasics: Point2f0, Point3f0, Sphere
 
@@ -8,15 +9,15 @@ using GeometryBasics: Point2f0, Point3f0, Sphere
 function build_network(layer_sizes::Vector{Int})
     N = sum(layer_sizes)
     layers = Int[]
-    for (ℓ, n) in enumerate(layer_sizes)
-        append!(layers, fill(ℓ, n))
+    for (l, n) in enumerate(layer_sizes)
+        append!(layers, fill(l, n))
     end
     neighbors = [Int[] for _ in 1:N]
     offset = cumsum(vcat(0, layer_sizes))
-    for ℓ in 1:length(layer_sizes)-1
-        for i in 1:layer_sizes[ℓ], j in 1:layer_sizes[ℓ+1]
-            u = offset[ℓ] + i
-            v = offset[ℓ+1] + j
+    for l in 1:length(layer_sizes)-1
+        for i in 1:layer_sizes[l], j in 1:layer_sizes[l+1]
+            u = offset[l] + i
+            v = offset[l+1] + j
             push!(neighbors[u], v)
             push!(neighbors[v], u)
         end
@@ -100,44 +101,77 @@ function plot_io_nodes(ts, Elocal, layers; layers_idx=(1, maximum(layers)))
 end
 
 # -------------------------------------------------------------------
-# 4C) Static network diagram (top‐down)
 function static_network_plot(layer_sizes::Vector{Int})
-    fig = Figure(size=(600,300))
-    ax  = Axis(fig[1,1], aspect=DataAspect())
-    hidedecorations!(ax)
-    hidespines!(ax)
+    n_layers = length(layer_sizes)
 
-    N, layers, neighbors = build_network(layer_sizes)
-    positions = Vector{Point2f0}(undef, N)
+    # 1) Compute node positions
+    positions    = Point2f0[]
+    layer_starts = Int[]
     idx = 1
     for (ℓ,n) in enumerate(layer_sizes)
-        ys = n==1 ? [0.0] : range(0.0, -1.0, length=n)
-        for i in 1:n
-            positions[idx] = Point2f0(ℓ, ys[i])
+        push!(layer_starts, idx)
+        ys = n == 1  ? [0.0] :
+             n == 2  ? [-0.5, 0.5] :
+                       range(-1, 1; length=n)
+        for y in ys
+            push!(positions, Point2f0(ℓ*2, y))
             idx += 1
         end
     end
 
-    for i in 1:N, j in neighbors[i]
-        if layers[j] == layers[i] + 1
-            lines!(ax, [positions[i], positions[j]], color=:gray)
+    # 2) Build arrow‐pairs between ℓ→ℓ+1
+    arrow_pairs = Tuple{Point2f0,Point2f0}[]
+    for ℓ in 1:n_layers-1
+        start1, start2 = layer_starts[ℓ], layer_starts[ℓ+1]
+        for i in 0:layer_sizes[ℓ]-1, j in 0:layer_sizes[ℓ+1]-1
+            push!(arrow_pairs,
+                (positions[start1 + i], positions[start2 + j]))
         end
     end
 
-    scatter!(ax,
-        getindex.(positions,1),
-        getindex.(positions,2),
-        color=:blue, markersize=12
-    )
+    # 3) Make figure & bare axis
+    fig = Figure(resolution = (600, 200))
+    ax  = Axis(fig[1, 1])
 
-    for i in 1:N
-        text!(ax, string(i);
-            position=(positions[i][1], positions[i][2]),
-            align=(:center,:center), color=:white, fontsize=14
+    # 4) Hide literally everything
+    hideticks!(ax)        # ticks + tick labels
+    hidespines!(ax)        # the four spines
+    ax.xgridvisible = false  # remove gridlines
+    ax.ygridvisible = false
+
+    # 5) Draw grey arrows
+    for (p1, p2) in arrow_pairs
+        arrows!(ax, [p1], [p2];
+            arrowhead  = Arrowhead(0.12, π/8),
+            linewidth  = 1,
+            color      = :gray,
         )
     end
 
-    return fig
+    # 6) Draw nodes + labels
+    for ℓ in 1:n_layers
+        col = ℓ == 1             ? :blue        :  # input
+              ℓ == n_layers      ? :red         :  # output
+                                     :forestgreen   # hidden
+        start = layer_starts[ℓ]
+        for k in 0:layer_sizes[ℓ]-1
+            p = positions[start + k]
+            scatter!(ax, [p];
+                color      = col,
+                markersize = 30,
+                strokewidth = 0,
+            )
+            text!(ax, string(start + k);
+                position   = p,
+                align      = (:center, :center),
+                color      = :white,
+                fontsize   = 16,
+                fontweight = "bold",
+            )
+        end
+    end
+
+    fig
 end
 
 # -------------------------------------------------------------------
@@ -148,10 +182,10 @@ function animate_network(sol::ODESolution, p, layer_sizes::Vector{Int})
 
     positions = Vector{Point3f0}(undef, N)
     idx = 1
-    for (ℓ,n) in enumerate(layer_sizes)
+    for (l,n) in enumerate(layer_sizes)
         ys = n==1 ? [0.0] : range(0.0, -1.0, length=n)
         for i in 1:n
-            positions[idx] = Point3f0(ℓ, ys[i], 0.0)
+            positions[idx] = Point3f0(l, ys[i], 0.0)
             idx += 1
         end
     end
@@ -178,13 +212,13 @@ end
 # -------------------------------------------------------------------
 # Main: ties everything together
 function main()
-    layer_sizes = [1,2,2,1]
+    layer_sizes = [2,4,4,1]
     N, layers, neighbors = build_network(layer_sizes)
 
-    m      = ones(N)
-    k_sink = 0.2 .* ones(N)
-    c      = 0.05 .* ones(N)
-    k_cpl  = 0.5
+    m      = 1.0 .* ones(N)
+    k_sink = 1.0 .* ones(N)
+    c      = 0.0 .* ones(N)
+    k_cpl  = 1.0
 
     p = (m=m, k_sink=k_sink, k_cpl=k_cpl, c=c, neighbors=neighbors)
 
@@ -192,18 +226,23 @@ function main()
     v0 = 2rand(N).-1
     u0 = vcat(x0, v0)
 
-    prob = ODEProblem(spring_mass_ode!, u0, (0.0, 10.0), p)
-    sol  = solve(prob, Tsit5(), saveat=0:0.0333:10.0)
+    prob = ODEProblem(spring_mass_ode!, u0, (0.0, 50.0), p)
+    sol  = solve(prob, Tsit5(), dt=0.01, saveat=0.01)
 
     Elocal, Etotal = compute_energies(sol, p)
     ts = sol.t
 
-    fig1 = plot_all_nodes(ts, Elocal, Etotal); display(fig1)
-    fig2 = plot_io_nodes(ts, Elocal, layers; layers_idx=(1,length(layer_sizes))); display(fig2)
-    fig3 = static_network_plot(layer_sizes); display(fig3)
+    CairoMakie.activate!()
+    fig1 = plot_all_nodes(ts, Elocal, Etotal)
+    display(fig1)   
+    fig2 = plot_io_nodes(ts, Elocal, layers; layers_idx=(1,length(layer_sizes)))
+    display(fig2)  
+    fig3 = static_network_plot(layer_sizes)
+    display(fig3)  
 
+    GLMakie.activate!()
     scene = animate_network(sol, p, layer_sizes)
-    display(scene)
+    display(scene) 
 end
 
 if abspath(PROGRAM_FILE) == @__FILE__
