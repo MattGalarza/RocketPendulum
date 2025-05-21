@@ -168,9 +168,9 @@ function static_network_plot(layer_sizes::Vector{Int})
 end
 
 # Visualization of energy network
-function animate_network3d(sol, p, layer_sizes::Vector{Int};
-                           x_spacing    = 3.0f0,
-                           y_spacing    = 1f0,
+function animate_network3d1(sol, p, layer_sizes::Vector{Int};
+                           x_spacing = 3.0f0,
+                           y_spacing = 1f0,
                            energy_scale = 2)
 
     N, layers, neighbors = build_network(layer_sizes)
@@ -207,7 +207,7 @@ function animate_network3d(sol, p, layer_sizes::Vector{Int};
     update_segments!(base_pos)
 
     # build scene
-    scene = Scene(resolution=(800,600), backgroundcolor=:white)
+    scene = Scene(size=(800,600), backgroundcolor=:white)
     meshscatter!(scene, posObs;
                  color = node_colors,
                  markersize = sphere_size)
@@ -252,7 +252,9 @@ function animate_network3d2(sol, p, layer_sizes::Vector{Int})
     make_segments(pts) = begin
         seg = Point3f0[]
         for (i,j) in conns
-            push!(seg, pts[i], pts[j])
+            if pts[i].x != pts[j].x
+                push!(seg, pts[i], pts[j])
+            end
         end
         seg
     end
@@ -302,6 +304,85 @@ function animate_network3d2(sol, p, layer_sizes::Vector{Int})
         segObs[] = make_segments(new_pos)
         sleep(1/60)
     end
+    return scene
+end
+function animate_network3d(sol, p, layer_sizes::Vector{Int};
+                           x_spacing = 3.0f0,
+                           y_spacing = 1f0,
+                           energy_scale = 2)
+
+    # build base positions
+    N, layers, neighbors = build_network(layer_sizes)
+    base_pos = Point3f0[]
+    for (ℓ,n) in enumerate(layer_sizes)
+        x₀  = (ℓ-1) * x_spacing
+        ys  = [(i - (n+1)/2) * y_spacing for i in 1:n]
+        for y in ys
+            push!(base_pos, Point3f0(x₀, y, 0f0))
+        end
+    end
+
+    # **only** springs to the *next* layer
+    conns = [
+      (i,j) for i in 1:N for j in neighbors[i]
+      if layers[j] == layers[i] + 1
+    ]
+
+    # energies
+    Elocal, _ = compute_energies(sol, p)
+    Emax      = maximum(Elocal)
+
+    # colors & sizing
+    node_colors = [
+      ℓ == 1               ? :royalblue     :
+      ℓ == maximum(layers) ? :firebrick     :
+                             :forestgreen
+      for ℓ in layers
+    ]
+    base_gap    = min(x_spacing, y_spacing)
+    sphere_size = 0.3f0 * base_gap
+
+    # observables
+    posObs = Observable(copy(base_pos))
+    segObs = Observable(Point3f0[])
+    function update_segments!(pts)
+        seg = Point3f0[]
+        for (i,j) in conns
+            push!(seg, pts[i], pts[j])
+        end
+        segObs[] = seg
+    end
+    update_segments!(base_pos)
+
+    # scene
+    scene = Scene(size=(800,600), backgroundcolor=:white)
+    meshscatter!(scene, posObs;
+                 color      = node_colors,
+                 markersize = sphere_size)
+    lines!(scene, segObs;
+           color     = :gray,
+           linewidth = 1.5)
+
+    # camera
+    xmid = mean(getindex.(base_pos,1))
+    cam3d!(scene;
+           eyeposition = Point3f0(xmid, -xmid,  xmid*0.6),
+           lookat      = Point3f0(xmid,  0f0,    0f0),
+           up          = Vec3f0(0,0,1))
+
+    # animate
+    @async for f in 1:length(sol.t)
+        new_pts = Point3f0[]
+        for i in 1:N
+            z     = Emax > 0 ? energy_scale * Float32(Elocal[i,f]/Emax) : 0f0
+            base  = base_pos[i]
+            push!(new_pts, Point3f0(base[1], base[2], z))
+        end
+        posObs[] = new_pts
+        update_segments!(new_pts)
+        sleep(1/30)
+    end
+
     return scene
 end
 
