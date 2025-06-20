@@ -504,6 +504,8 @@ record(fig, "pendulum.mp4", times; framerate=60)
 
 
 
+
+
 using GLMakie, Observables, DifferentialEquations, LinearAlgebra, Sundials, OrdinaryDiffEq, StaticArrays
 
 # ----------------------------- System Parameters -----------------------------
